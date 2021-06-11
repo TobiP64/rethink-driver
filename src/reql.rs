@@ -22,7 +22,7 @@
 
 use {
 	crate::*,
-	std::time::Duration,
+	std::{time::Duration, io::Write},
 	serde::{Deserialize, Deserializer, Serialize, de::DeserializeOwned},
 	serde_repr::*
 };
@@ -30,7 +30,18 @@ use {
 #[cfg(feature = "async")]
 use std::{future::Future, pin::Pin};
 
-pub use self::{types::*, terms::*};
+pub use self::{
+	result::*,
+	types::*,
+	primitives::*,
+	expr::*,
+	none::*,
+	cast::*,
+	var::*,
+	var_args::*,
+	typed_fn::*,
+	terms::*
+};
 
 #[derive(Copy, Clone, Debug, Eq, PartialEq, Serialize_repr)]
 #[repr(u32)]
@@ -123,7 +134,7 @@ pub enum Durability {
 }
 
 impl<T: ReqlTerm> Query<'_, T> {
-	pub fn serialize(&self, mut dst: &mut impl std::io::Write) -> std::io::Result<()> {
+	pub fn serialize(&self, mut dst: &mut impl Write) -> std::io::Result<()> {
 		write!(dst, "[{}", self.r#type as u32)?;
 		
 		if let Some(term) = &self.term {
@@ -218,31 +229,6 @@ pub struct ResponseWithError {
 	pub backtrace:  Option<Vec<usize>>,
 }
 
-#[derive(Clone, Debug)]
-pub enum DocResult<T> {
-	Ok(T),
-	Err(String)
-}
-
-impl<T> DocResult<T> {
-	pub fn into_result(self) -> Result<T> {
-		match self {
-			Self::Ok(doc)  => Ok(doc),
-			Self::Err(err) => Err(crate::Error::Deserialize(err))
-		}
-	}
-}
-
-impl<'de, T: Deserialize<'de>> Deserialize<'de> for DocResult<T> {
-	fn deserialize<D>(deserializer: D) -> std::result::Result<Self, <D as Deserializer<'de>>::Error> where
-		D: Deserializer<'de> {
-		Ok(match T::deserialize(deserializer) {
-			Ok(v)  => Self::Ok(v),
-			Err(e) => Self::Err(e.to_string()),
-		})
-	}
-}
-
 impl<T: DeserializeOwned> Response<T> {
 	pub fn from_buf(buf: &[u8]) -> Result<Self> {
 		use {crate::Error::*, ReqlError::*};
@@ -293,177 +279,6 @@ pub enum ReqlDriverError {
 #[derive(Copy, Clone, Debug, Default, Deserialize)]
 pub struct Binary;
 
-/// Document returned by the `server_info` operation.
-#[derive(Debug, Clone, Default, Deserialize)]
-pub struct ServerInfo {
-	pub id:    String,
-	pub name:  String,
-	pub proxy: bool
-}
-
-/// Document returned by the `db_create` operation.
-#[derive(Debug, Clone, Default, Deserialize)]
-pub struct DbCreateResult {
-	/// Always `1`.
-	pub dbs_created:    usize,
-	#[serde(default)]
-	pub config_changes: Vec<Change<DbConfig, DbConfig>>
-}
-
-/// Document returned by the `db_drop` operation.
-#[derive(Debug, Clone, Default, Deserialize)]
-pub struct DbDropResult {
-	/// Always `1`.
-	pub dbs_dropped:    usize,
-	#[serde(default)]
-	pub config_changes: Vec<Change<DbConfig, DbConfig>>
-}
-
-#[derive(Debug, Clone, Default, Deserialize)]
-pub struct DbConfig {
-	pub id:   String,
-	pub name: String
-}
-
-/// Document returned by the `table_create` operation.
-#[derive(Debug, Clone, Default, Deserialize)]
-pub struct TableCreateResult {
-	/// Always `1`.
-	pub tables_created: usize,
-	#[serde(default)]
-	pub config_changes: Vec<Change<ConfigResult, ()>>
-}
-
-/// Document returned by the `table_drop` operation.
-#[derive(Debug, Clone, Default, Deserialize)]
-pub struct TableDropResult {
-	/// Always `1`.
-	pub tables_dropped: usize,
-	#[serde(default)]
-	pub config_changes: Vec<Change<(), ConfigResult>>
-}
-
-#[derive(Debug, Clone, Default, Deserialize)]
-pub struct WriteHookResult {
-	pub function: Binary,
-	pub query:    String
-}
-
-/// Document returned by writing operations, such as `insert`, `update`, `replace`
-/// and `delete`.
-#[derive(Debug, Clone, Default, Deserialize)]
-pub struct WriteResult<O = (), N = ()> {
-	/// The number of documents that were deleted.
-	pub deleted:        usize,
-	/// The number of errors encountered while performing the operation.
-	pub errors:         usize,
-	/// If errors were encountered, contains the text of the first error.
-	pub first_error:    Option<String>,
-	/// A list of generated primary keys for inserted documents whose primary keys were
-	/// not specified (capped to 100,000).
-	#[serde(default)]
-	pub generated_keys: Vec<RDbId>,
-	/// The number of documents that were inserted.
-	pub inserted:       usize,
-	/// The number of documents that were replaced/updated.
-	pub replaced:       usize,
-	/// The number of documents that were skipped.
-	pub skipped:        usize,
-	/// The number of documents that would have been modified, except that the new value
-	/// was the same as the old value.
-	pub unchanged:      usize,
-	/// If `return_changes` is set to `true`, this will be an array of objects, one for
-	/// each object affected by the operation.
-	///
-	/// See `Change<N, O>`
-	#[serde(default)]
-	pub changes:        Vec<Change<N, O>>
-}
-
-#[derive(Copy, Clone, Debug, Default, Deserialize)]
-pub struct Change<N, O>{
-	pub new_val: Option<N>,
-	pub old_val: Option<O>
-}
-
-#[derive(Clone, Debug, Default, Deserialize)]
-pub struct GrantResult {
-	pub granted:             usize,
-	#[serde(default)]
-	pub permissions_changes: Vec<Change<Permissions, Permissions>>
-}
-
-#[derive(Copy, Clone, Debug, Default, Deserialize)]
-pub struct Permissions {
-	pub read:    Option<bool>,
-	pub write:   Option<bool>,
-	pub connect: Option<bool>,
-	pub config:  Option<bool>
-}
-
-#[derive(Clone, Debug, Default, Deserialize)]
-pub struct ConfigResult {
-	pub db:          String,
-	pub id:          String,
-	pub name:        String,
-	pub primary_key: String,
-	pub shards:      Vec<ConfigShard>,
-	pub indexes:     Vec<String>,
-	pub write_acks:  String,
-	pub write_hook:  Option<Binary>,
-	pub durability:  String
-}
-
-#[derive(Clone, Debug, Default, Deserialize)]
-pub struct ConfigShard {
-	pub primary_replica:    String,
-	pub replicas:           Vec<String>,
-	pub nonvoting_replicas: Vec<String>
-}
-
-#[derive(Clone, Debug, Default, Deserialize)]
-pub struct StatusResult {
-	pub db:          String,
-	pub id:          String,
-	pub name:        String,
-	pub raft_leader: String,
-	pub shards:      Vec<StatusShard>,
-	pub status:      Status
-}
-
-#[derive(Clone, Debug, Default, Deserialize)]
-pub struct StatusShard {
-	pub primary_replica:    String,
-	pub replicas:           Vec<StatusReplica>
-}
-
-#[derive(Clone, Debug, Default, Deserialize)]
-pub struct StatusReplica {
-	pub server: String,
-	pub state:  String
-}
-
-#[derive(Copy, Clone, Debug, Default, Deserialize)]
-pub struct Status {
-	pub all_replicas_ready:       bool,
-	pub ready_for_outdated_reads: bool,
-	pub ready_for_reads:          bool,
-	pub ready_for_writes:         bool
-}
-
-#[derive(Clone, Debug, Default, Deserialize)]
-pub struct RebalanceResult {
-	pub rebalanced:     usize,
-	pub status_changes: Vec<Change<StatusResult, StatusResult>>
-}
-
-#[derive(Clone, Debug, Default, Deserialize)]
-pub struct ReconfigureResult {
-	pub reconfigured:   usize,
-	pub config_changes: Vec<Change<ConfigResult, ConfigResult>>,
-	pub status_changes: Vec<Change<StatusResult, StatusResult>>
-}
-
 pub trait Run: ReqlTerm + Sized {
 	/// Run a query on the given connection. Returns a cursor that yields elements of the type `T`.
 	fn run<T: DeserializeOwned>(self, conn: &RDbConnection, options: Option<QueryOptions>) -> Result<Cursor<T>> {
@@ -480,11 +295,208 @@ pub trait Run: ReqlTerm + Sized {
 
 impl<T: ReqlTerm + Sized> Run for T {}
 
-pub trait VarArgsSerializable {
-	fn serialize(&self, dst: &mut impl std::io::Write) -> std::io::Result<()>;
+pub trait ReqlTerm {
+	fn serialize(&self, dst: &mut impl Write) -> std::io::Result<()>;
 }
 
-pub trait VarArgsTrait<T>: VarArgsSerializable {
+mod result {
+	use super::*;
+	
+	#[derive(Clone, Debug)]
+	pub enum DocResult<T> {
+		Ok(T),
+		Err(String)
+	}
+	
+	impl<T> DocResult<T> {
+		pub fn into_result(self) -> Result<T> {
+			match self {
+				Self::Ok(doc)  => Ok(doc),
+				Self::Err(err) => Err(crate::Error::Deserialize(err))
+			}
+		}
+	}
+	
+	impl<'de, T: Deserialize<'de>> Deserialize<'de> for DocResult<T> {
+		fn deserialize<D>(deserializer: D) -> std::result::Result<Self, <D as Deserializer<'de>>::Error> where
+			D: Deserializer<'de> {
+			Ok(match T::deserialize(deserializer) {
+				Ok(v)  => Self::Ok(v),
+				Err(e) => Self::Err(e.to_string()),
+			})
+		}
+	}
+	
+	/// Document returned by the `server_info` operation.
+	#[derive(Debug, Clone, Default, Deserialize)]
+	pub struct ServerInfo {
+		pub id:    String,
+		pub name:  String,
+		pub proxy: bool
+	}
+	
+	/// Document returned by the `db_create` operation.
+	#[derive(Debug, Clone, Default, Deserialize)]
+	pub struct DbCreateResult {
+		/// Always `1`.
+		pub dbs_created:    usize,
+		#[serde(default)]
+		pub config_changes: Vec<Change<DbConfig, DbConfig>>
+	}
+	
+	/// Document returned by the `db_drop` operation.
+	#[derive(Debug, Clone, Default, Deserialize)]
+	pub struct DbDropResult {
+		/// Always `1`.
+		pub dbs_dropped:    usize,
+		#[serde(default)]
+		pub config_changes: Vec<Change<DbConfig, DbConfig>>
+	}
+	
+	#[derive(Debug, Clone, Default, Deserialize)]
+	pub struct DbConfig {
+		pub id:   String,
+		pub name: String
+	}
+	
+	/// Document returned by the `table_create` operation.
+	#[derive(Debug, Clone, Default, Deserialize)]
+	pub struct TableCreateResult {
+		/// Always `1`.
+		pub tables_created: usize,
+		#[serde(default)]
+		pub config_changes: Vec<Change<ConfigResult, ()>>
+	}
+	
+	/// Document returned by the `table_drop` operation.
+	#[derive(Debug, Clone, Default, Deserialize)]
+	pub struct TableDropResult {
+		/// Always `1`.
+		pub tables_dropped: usize,
+		#[serde(default)]
+		pub config_changes: Vec<Change<(), ConfigResult>>
+	}
+	
+	#[derive(Debug, Clone, Default, Deserialize)]
+	pub struct WriteHookResult {
+		pub function: Binary,
+		pub query:    String
+	}
+	
+	/// Document returned by writing operations, such as `insert`, `update`, `replace`
+	/// and `delete`.
+	#[derive(Debug, Clone, Default, Deserialize)]
+	pub struct WriteResult<O = (), N = ()> {
+		/// The number of documents that were deleted.
+		pub deleted:        usize,
+		/// The number of errors encountered while performing the operation.
+		pub errors:         usize,
+		/// If errors were encountered, contains the text of the first error.
+		pub first_error:    Option<String>,
+		/// A list of generated primary keys for inserted documents whose primary keys were
+		/// not specified (capped to 100,000).
+		#[serde(default)]
+		pub generated_keys: Vec<RDbId>,
+		/// The number of documents that were inserted.
+		pub inserted:       usize,
+		/// The number of documents that were replaced/updated.
+		pub replaced:       usize,
+		/// The number of documents that were skipped.
+		pub skipped:        usize,
+		/// The number of documents that would have been modified, except that the new value
+		/// was the same as the old value.
+		pub unchanged:      usize,
+		/// If `return_changes` is set to `true`, this will be an array of objects, one for
+		/// each object affected by the operation.
+		///
+		/// See `Change<N, O>`
+		#[serde(default)]
+		pub changes:        Vec<Change<N, O>>
+	}
+	
+	#[derive(Copy, Clone, Debug, Default, Deserialize)]
+	pub struct Change<N, O>{
+		pub new_val: Option<N>,
+		pub old_val: Option<O>
+	}
+	
+	#[derive(Clone, Debug, Default, Deserialize)]
+	pub struct GrantResult {
+		pub granted:             usize,
+		#[serde(default)]
+		pub permissions_changes: Vec<Change<Permissions, Permissions>>
+	}
+	
+	#[derive(Copy, Clone, Debug, Default, Deserialize)]
+	pub struct Permissions {
+		pub read:    Option<bool>,
+		pub write:   Option<bool>,
+		pub connect: Option<bool>,
+		pub config:  Option<bool>
+	}
+	
+	#[derive(Clone, Debug, Default, Deserialize)]
+	pub struct ConfigResult {
+		pub db:          String,
+		pub id:          String,
+		pub name:        String,
+		pub primary_key: String,
+		pub shards:      Vec<ConfigShard>,
+		pub indexes:     Vec<String>,
+		pub write_acks:  String,
+		pub write_hook:  Option<Binary>,
+		pub durability:  String
+	}
+	
+	#[derive(Clone, Debug, Default, Deserialize)]
+	pub struct ConfigShard {
+		pub primary_replica:    String,
+		pub replicas:           Vec<String>,
+		pub nonvoting_replicas: Vec<String>
+	}
+	
+	#[derive(Clone, Debug, Default, Deserialize)]
+	pub struct StatusResult {
+		pub db:          String,
+		pub id:          String,
+		pub name:        String,
+		pub raft_leader: String,
+		pub shards:      Vec<StatusShard>,
+		pub status:      Status
+	}
+	
+	#[derive(Clone, Debug, Default, Deserialize)]
+	pub struct StatusShard {
+		pub primary_replica:    String,
+		pub replicas:           Vec<StatusReplica>
+	}
+	
+	#[derive(Clone, Debug, Default, Deserialize)]
+	pub struct StatusReplica {
+		pub server: String,
+		pub state:  String
+	}
+	
+	#[derive(Copy, Clone, Debug, Default, Deserialize)]
+	pub struct Status {
+		pub all_replicas_ready:       bool,
+		pub ready_for_outdated_reads: bool,
+		pub ready_for_reads:          bool,
+		pub ready_for_writes:         bool
+	}
+	
+	#[derive(Clone, Debug, Default, Deserialize)]
+	pub struct RebalanceResult {
+		pub rebalanced:     usize,
+		pub status_changes: Vec<Change<StatusResult, StatusResult>>
+	}
+	
+	#[derive(Clone, Debug, Default, Deserialize)]
+	pub struct ReconfigureResult {
+		pub reconfigured:   usize,
+		pub config_changes: Vec<Change<ConfigResult, ConfigResult>>,
+		pub status_changes: Vec<Change<StatusResult, StatusResult>>
+	}
 }
 
 mod types {
@@ -529,58 +541,16 @@ mod types {
 	pub struct ReqlDynOrdering;
 	pub struct ReqlDynPathSpec;
 	pub struct ReqlDynError;
-	
-	macro_rules! varargs {
-		( $head:ident, ) => {};
-		( $head:ident $(, $tail:ident )*, ) => {
-			varargs!( $( $tail, )* );
-		
-			impl< $head: ReqlTop      $(, $tail: ReqlTop      )* > VarArgsTrait<ReqlDynTop>      for ( $head $(, $tail )* ) {}
-			impl< $head: ReqlDatum    $(, $tail: ReqlDatum    )* > VarArgsTrait<ReqlDynDatum>    for ( $head $(, $tail )* ) {}
-			impl< $head: ReqlNull     $(, $tail: ReqlNull     )* > VarArgsTrait<ReqlDynNull>     for ( $head $(, $tail )* ) {}
-			impl< $head: ReqlBool     $(, $tail: ReqlBool     )* > VarArgsTrait<ReqlDynBool>     for ( $head $(, $tail )* ) {}
-			impl< $head: ReqlNumber   $(, $tail: ReqlNumber   )* > VarArgsTrait<ReqlDynNumber>   for ( $head $(, $tail )* ) {}
-			impl< $head: ReqlString   $(, $tail: ReqlString   )* > VarArgsTrait<ReqlDynString>   for ( $head $(, $tail )* ) {}
-			impl< $head: ReqlObject   $(, $tail: ReqlObject   )* > VarArgsTrait<ReqlDynObject>   for ( $head $(, $tail )* ) {}
-			impl< $head: ReqlArray    $(, $tail: ReqlArray    )* > VarArgsTrait<ReqlDynArray>    for ( $head $(, $tail )* ) {}
-			impl< $head: ReqlSequence $(, $tail: ReqlSequence )* > VarArgsTrait<ReqlDynSequence> for ( $head $(, $tail )* ) {}
-			impl< $head: ReqlPathSpec $(, $tail: ReqlPathSpec )* > VarArgsTrait<ReqlDynPathSpec> for ( $head $(, $tail )* ) {}
-			
-			impl< $head: ReqlTerm $(, $tail: ReqlTerm )* > VarArgsSerializable for ( $head $(, $tail )* ) {
-				#[allow(non_snake_case, unused_variables)]
-				fn serialize(&self, dst: &mut impl std::io::Write) -> std::io::Result<()> {
-					let ( $head $(, $tail )* ) = self;
-					$head.serialize(dst)?;
-					
-					$(
-						dst.write_all(b",")?;
-						$tail.serialize(dst)?;
-					)*
-					
-					Ok(())
-				}
-			}
-		};
-	}
-	
-	varargs!(A0, A1, A2, A3, A4, A5, A6, A7, A8, A9, A10, A11, A12, A13, A14, A15, );
 }
 
-mod terms {
-	#![allow(clippy::wrong_self_convention)]
-	
-	use {super::types::*, std::{io::{Write, Result}, marker::PhantomData}};
-	
-	pub trait ReqlTerm {
-		fn serialize(&self, dst: &mut impl std::io::Write) -> std::io::Result<()>;
-	}
+mod primitives {
+	use super::*;
 	
 	impl ReqlTop for () {}
 	impl ReqlDatum for () {}
 	impl ReqlNull for () {}
-	
 	impl ReqlTerm for () {
-		fn serialize(&self, dst: &mut impl Write) -> Result<()> {
+		fn serialize(&self, dst: &mut impl Write) -> std::io::Result<()> {
 			dst.write_all(b"null")
 		}
 	}
@@ -588,74 +558,35 @@ mod terms {
 	impl ReqlTop for bool {}
 	impl ReqlDatum for bool {}
 	impl ReqlBool for bool {}
-	
 	impl ReqlTerm for bool {
-		fn serialize(&self, dst: &mut impl Write) -> Result<()> {
+		fn serialize(&self, dst: &mut impl Write) -> std::io::Result<()> {
 			dst.write_all(if *self { b"true" } else { b"false" })
 		}
 	}
 	
-	impl ReqlTop for u32 {}
-	impl ReqlDatum for u32 {}
-	impl ReqlNumber for u32 {}
-	impl ReqlTerm for u32 {
-		fn serialize(&self, dst: &mut impl Write) -> Result<()> {
-			write!(dst, "{}", self)
+	macro_rules! reql_number_impl {
+			( $( $ty:ty ),* ) => {
+				$(
+					impl ReqlTop for $ty {}
+					impl ReqlDatum for $ty {}
+					impl ReqlNumber for $ty {}
+					impl ReqlTerm for $ty {
+						fn serialize(&self, dst: &mut impl Write) -> std::io::Result<()> {
+							write!(dst, "{}", self)
+						}
+					}
+				)*
+			};
 		}
-	}
 	
-	impl ReqlTop for i32 {}
-	impl ReqlDatum for i32 {}
-	impl ReqlNumber for i32 {}
-	impl ReqlTerm for i32 {
-		fn serialize(&self, dst: &mut impl Write) -> Result<()> {
-			write!(dst, "{}", self)
-		}
-	}
+	reql_number_impl!(i8, i16, i32, i64, i128, isize, u8, u16, u32, u64, u128, usize, f32, f64);
 	
-	impl ReqlTop for u64 {}
-	impl ReqlDatum for u64 {}
-	impl ReqlNumber for u64 {}
-	impl ReqlTerm for u64 {
-		fn serialize(&self, dst: &mut impl Write) -> Result<()> {
-			write!(dst, "{}", self)
-		}
-	}
-	
-	impl ReqlTop for i64 {}
-	impl ReqlDatum for i64 {}
-	impl ReqlNumber for i64 {}
-	impl ReqlTerm for i64 {
-		fn serialize(&self, dst: &mut impl Write) -> Result<()> {
-			write!(dst, "{}", self)
-		}
-	}
-	
-	impl ReqlTop for f32 {}
-	impl ReqlDatum for f32 {}
-	impl ReqlNumber for f32 {}
-	impl ReqlTerm for f32 {
-		fn serialize(&self, dst: &mut impl Write) -> Result<()> {
-			write!(dst, "{}", self)
-		}
-	}
-	
-	impl ReqlTop for f64 {}
-	impl ReqlDatum for f64 {}
-	impl ReqlNumber for f64 {}
-	impl ReqlTerm for f64 {
-		fn serialize(&self, dst: &mut impl Write) -> Result<()> {
-			write!(dst, "{}", self)
-		}
-	}
-	
-	impl<'a, T: ReqlTop> ReqlTop for &'a [T] {}
-	impl<'a, T: ReqlTop> ReqlDatum for &'a [T] {}
-	impl<'a, T: ReqlTop> ReqlSequence for &'a [T] {}
-	impl<'a, T: ReqlTop> ReqlArray for &'a [T] {}
-	
-	impl<'a, T: ReqlTop> ReqlTerm for &'a [T] {
-		fn serialize(&self, dst: &mut impl Write) -> Result<()> {
+	impl<T: ReqlTop> ReqlTop      for [T] {}
+	impl<T: ReqlTop> ReqlDatum    for [T] {}
+	impl<T: ReqlTop> ReqlSequence for [T] {}
+	impl<T: ReqlTop> ReqlArray    for [T] {}
+	impl<T: ReqlTop> ReqlTerm     for [T] {
+		fn serialize(&self, dst: &mut impl Write) -> std::io::Result<()> {
 			if self.is_empty() {
 				return dst.write_all(b"[2, []]");
 			}
@@ -672,79 +603,80 @@ mod terms {
 		}
 	}
 	
-	impl<T: ReqlTop, const N: usize> ReqlTop      for [T; N] {}
-	impl<T: ReqlTop, const N: usize> ReqlDatum    for [T; N] {}
-	impl<T: ReqlTop, const N: usize> ReqlSequence for [T; N] {}
-	impl<T: ReqlTop, const N: usize> ReqlArray    for [T; N] {}
-	impl<T: ReqlTop, const N: usize> ReqlTerm     for [T; N] {
-		fn serialize(&self, dst: &mut impl Write) -> Result<()> {
-			self.as_ref().serialize(dst)
+	macro_rules! reql_array_impl {
+			( $( < $( $lifetime:lifetime ),* > $ty:ty ),* ) => {
+				$(
+					impl< $( $lifetime, )* T: ReqlTop> ReqlTop      for $ty {}
+					impl< $( $lifetime, )* T: ReqlTop> ReqlDatum    for $ty {}
+					impl< $( $lifetime, )* T: ReqlTop> ReqlSequence for $ty {}
+					impl< $( $lifetime, )* T: ReqlTop> ReqlArray    for $ty {}
+					impl< $( $lifetime, )* T: ReqlTop> ReqlTerm     for $ty {
+						fn serialize(&self, dst: &mut impl Write) -> std::io::Result<()> {
+							<[T] as ReqlTerm>::serialize(&*self, dst)
+						}
+					}
+				)*
+			};
 		}
-	}
+	
+	reql_array_impl!(<'a> &'a [T], <> Vec<T>, <'a> &'a Vec<T>);
+	
 	
 	impl ReqlTop for str {}
 	impl ReqlDatum for str {}
 	impl ReqlString for str {}
 	impl ReqlPathSpec for str {}
 	impl ReqlTerm for str {
-		fn serialize(&self, dst: &mut impl Write) -> Result<()> {
+		fn serialize(&self, dst: &mut impl Write) -> std::io::Result<()> {
 			write!(dst, "\"{}\"", self)
 		}
 	}
 	
-	impl<'a> ReqlTop for &'a str {}
-	impl<'a> ReqlDatum for &'a str {}
-	impl<'a> ReqlString for &'a str {}
-	impl<'a> ReqlPathSpec for &'a str {}
-	impl<'a> ReqlTerm for &'a str {
-		fn serialize(&self, dst: &mut impl Write) -> Result<()> {
-			write!(dst, "\"{}\"", self)
+	macro_rules! reql_str_impl {
+			( $( < $( $lifetime:lifetime ),* > $ty:ty ),* ) => {
+				$(
+					impl< $( $lifetime, )* > ReqlTop      for $ty {}
+					impl< $( $lifetime, )* > ReqlDatum    for $ty {}
+					impl< $( $lifetime, )* > ReqlString   for $ty {}
+					impl< $( $lifetime, )* > ReqlPathSpec for $ty {}
+					impl< $( $lifetime, )* > ReqlTerm     for $ty {
+						fn serialize(&self, dst: &mut impl Write) -> std::io::Result<()> {
+							<str as ReqlTerm>::serialize(&*self, dst)
+						}
+					}
+				)*
+			};
 		}
-	}
 	
-	impl<'a> VarArgsTrait<ReqlDynDatum> for &'a str {}
+	reql_str_impl!(<'a> &'a str, <> String, <'a> &'a String);
+	
+	/*impl<'a> VarArgsTrait<ReqlDynDatum> for &'a str {}
 	impl<'a> VarArgsTrait<ReqlDynPathSpec> for &'a str {}
 	impl<'a> VarArgsSerializable for &'a str {
-		fn serialize(&self, dst: &mut impl Write) -> Result<()> {
+		fn serialize(&self, dst: &mut impl Write) -> std::io::Result<()> {
 			<Self as ReqlTerm>::serialize(self, dst)
-		}
-	}
-	
-	impl ReqlTop for String {}
-	impl ReqlDatum for String {}
-	impl ReqlString for String {}
-	impl ReqlPathSpec for String {}
-	impl ReqlTerm for String {
-		fn serialize(&self, dst: &mut impl Write) -> Result<()> {
-			write!(dst, "\"{}\"", self)
-		}
-	}
-	
-	impl<'a> ReqlTop for &'a String {}
-	impl<'a> ReqlDatum for &'a String {}
-	impl<'a> ReqlString for &'a String {}
-	impl<'a> ReqlPathSpec for &'a String {}
-	impl<'a> ReqlTerm for &'a String {
-		fn serialize(&self, dst: &mut impl Write) -> Result<()> {
-			write!(dst, "\"{}\"", self)
 		}
 	}
 	
 	impl<'a> VarArgsTrait<ReqlDynDatum> for &'a String {}
 	impl<'a> VarArgsSerializable for &'a String {
-		fn serialize(&self, dst: &mut impl Write) -> Result<()> {
+		fn serialize(&self, dst: &mut impl Write) -> std::io::Result<()> {
 			<Self as ReqlTerm>::serialize(self, dst)
 		}
-	}
+	}*/
 	
 	impl ReqlTop for RDbId {}
 	impl ReqlDatum for RDbId {}
 	impl ReqlString for RDbId {}
 	impl ReqlTerm for RDbId {
-		fn serialize(&self, dst: &mut impl Write) -> Result<()> {
+		fn serialize(&self, dst: &mut impl Write) -> std::io::Result<()> {
 			write!(dst, "\"{}\"", self)
 		}
 	}
+}
+
+mod expr {
+	use super::*;
 	
 	#[derive(Clone, Default, Debug)]
 	pub struct ReqlExpr(pub String);
@@ -766,10 +698,10 @@ mod terms {
 	}
 	
 	#[derive(Clone, Default, Debug)]
-	pub struct ReqlExpr2<F: Fn(&mut dyn std::io::Write) -> Result<()>>(F);
+	pub struct ReqlExpr2<F: Fn(&mut dyn Write) -> std::io::Result<()>>(F);
 	
-	impl<F: Fn(&mut dyn std::io::Write) -> Result<()>> ReqlTerm for ReqlExpr2<F> {
-		fn serialize(&self, dst: &mut impl Write) -> Result<()> {
+	impl<F: Fn(&mut dyn Write) -> std::io::Result<()>> ReqlTerm for ReqlExpr2<F> {
+		fn serialize(&self, dst: &mut impl Write) -> std::io::Result<()> {
 			self.0(dst)
 		}
 	}
@@ -779,164 +711,10 @@ mod terms {
 	impl ReqlObject for ReqlExpr {}
 	
 	impl ReqlTerm for ReqlExpr {
-		fn serialize(&self, dst: &mut impl Write) -> Result<()> {
+		fn serialize(&self, dst: &mut impl Write) -> std::io::Result<()> {
 			dst.write_all(self.0.as_bytes())
 		}
 	}
-	
-	#[derive(Copy, Clone, Default, Debug)]
-	pub struct ReqlNoneTerm;
-	
-	impl ReqlTop             for ReqlNoneTerm {}
-	impl ReqlDatum           for ReqlNoneTerm {}
-	impl ReqlNull            for ReqlNoneTerm {}
-	impl ReqlBool            for ReqlNoneTerm {}
-	impl ReqlNumber          for ReqlNoneTerm {}
-	impl ReqlString          for ReqlNoneTerm {}
-	impl ReqlObject          for ReqlNoneTerm {}
-	impl ReqlSingleSelection for ReqlNoneTerm {}
-	impl ReqlArray           for ReqlNoneTerm {}
-	impl ReqlSequence        for ReqlNoneTerm {}
-	impl ReqlStream          for ReqlNoneTerm {}
-	impl ReqlStreamSelection for ReqlNoneTerm {}
-	impl ReqlTable           for ReqlNoneTerm {}
-	impl ReqlDatabase        for ReqlNoneTerm {}
-	impl ReqlFunction        for ReqlNoneTerm { type Args = (); type Output = (); }
-	impl ReqlOrdering        for ReqlNoneTerm {}
-	impl ReqlPathSpec        for ReqlNoneTerm {}
-	impl ReqlErrorTy         for ReqlNoneTerm {}
-	
-	impl ReqlTerm for ReqlNoneTerm {
-		fn serialize(&self, _dst: &mut impl Write) -> Result<()> {
-			unreachable!()
-		}
-	}
-	
-	pub struct ReqlOpCast<T: ReqlTerm>(T);
-	
-	impl<T: ReqlTerm> ReqlTop             for ReqlOpCast<T> {}
-	impl<T: ReqlTerm> ReqlDatum           for ReqlOpCast<T> {}
-	impl<T: ReqlTerm> ReqlNull            for ReqlOpCast<T> {}
-	impl<T: ReqlTerm> ReqlBool            for ReqlOpCast<T> {}
-	impl<T: ReqlTerm> ReqlNumber          for ReqlOpCast<T> {}
-	impl<T: ReqlTerm> ReqlString          for ReqlOpCast<T> {}
-	impl<T: ReqlTerm> ReqlObject          for ReqlOpCast<T> {}
-	impl<T: ReqlTerm> ReqlSingleSelection for ReqlOpCast<T> {}
-	impl<T: ReqlTerm> ReqlArray           for ReqlOpCast<T> {}
-	impl<T: ReqlTerm> ReqlSequence        for ReqlOpCast<T> {}
-	impl<T: ReqlTerm> ReqlStream          for ReqlOpCast<T> {}
-	impl<T: ReqlTerm> ReqlStreamSelection for ReqlOpCast<T> {}
-	impl<T: ReqlTerm> ReqlTable           for ReqlOpCast<T> {}
-	impl<T: ReqlTerm> ReqlDatabase        for ReqlOpCast<T> {}
-	//impl<T: ReqlTerm> ReqlFunction        for ReqlOpCast<T> {}
-	impl<T: ReqlTerm> ReqlOrdering        for ReqlOpCast<T> {}
-	impl<T: ReqlTerm> ReqlPathSpec        for ReqlOpCast<T> {}
-	impl<T: ReqlTerm> ReqlErrorTy         for ReqlOpCast<T> {}
-	
-	impl<T: ReqlTerm> ReqlTerm for ReqlOpCast<T> {
-		fn serialize(&self, dst: &mut impl Write) -> Result<()> {
-			self.0.serialize(dst)
-		}
-	}
-	
-	pub trait ReqlCastInfix: ReqlTerm + Sized {
-		fn cast(self) -> ReqlOpCast<Self> {
-			ReqlOpCast(self)
-		}
-	}
-	
-	impl<T: ReqlTerm> ReqlCastInfix for T {}
-	
-	pub fn reql_to_string(buf: &mut Vec<u8>, term: impl ReqlTerm) {
-		term.serialize(buf).unwrap();
-	}
-	
-	#[derive(Debug, Default)]
-	pub struct ReqlVar<T, const I: usize>(PhantomData<T>);
-	
-	impl<T, const I: usize> Clone for ReqlVar<T, I> {
-		fn clone(&self) -> Self {
-			Self(PhantomData)
-		}
-	}
-	
-	impl<T, const I: usize> Copy for ReqlVar<T, I> {}
-	
-	impl<T, const I: usize> ReqlTerm for ReqlVar<T, I> {
-		fn serialize(&self, dst: &mut impl Write) -> Result<()> {
-			write!(dst, "[10,[{}]]", I)?;
-			Ok(())
-		}
-	}
-	
-	impl<const I: usize> ReqlTop             for ReqlVar<ReqlDynTop, I> {}
-	impl<const I: usize> ReqlTop             for ReqlVar<ReqlDynDatum, I> {}
-	impl<const I: usize> ReqlDatum           for ReqlVar<ReqlDynDatum, I> {}
-	impl<const I: usize> ReqlTop             for ReqlVar<ReqlDynNull, I> {}
-	impl<const I: usize> ReqlDatum           for ReqlVar<ReqlDynNull, I> {}
-	impl<const I: usize> ReqlNull            for ReqlVar<ReqlDynNull, I> {}
-	impl<const I: usize> ReqlTop             for ReqlVar<ReqlDynBool, I> {}
-	impl<const I: usize> ReqlDatum           for ReqlVar<ReqlDynBool, I> {}
-	impl<const I: usize> ReqlBool            for ReqlVar<ReqlDynBool, I> {}
-	impl<const I: usize> ReqlTop             for ReqlVar<ReqlDynNumber, I> {}
-	impl<const I: usize> ReqlNumber          for ReqlVar<ReqlDynNumber, I> {}
-	impl<const I: usize> ReqlDatum           for ReqlVar<ReqlDynNumber, I> {}
-	impl<const I: usize> ReqlString          for ReqlVar<ReqlDynNumber, I> {}
-	impl<const I: usize> ReqlTop             for ReqlVar<ReqlDynObject, I> {}
-	impl<const I: usize> ReqlDatum           for ReqlVar<ReqlDynObject, I> {}
-	impl<const I: usize> ReqlObject          for ReqlVar<ReqlDynObject, I> {}
-	impl<const I: usize> ReqlTop             for ReqlVar<ReqlDynSingleSelection, I> {}
-	impl<const I: usize> ReqlDatum           for ReqlVar<ReqlDynSingleSelection, I> {}
-	impl<const I: usize> ReqlObject          for ReqlVar<ReqlDynSingleSelection, I> {}
-	impl<const I: usize> ReqlSingleSelection for ReqlVar<ReqlDynSingleSelection, I> {}
-	impl<const I: usize> ReqlTop             for ReqlVar<ReqlDynArray, I> {}
-	impl<const I: usize> ReqlDatum           for ReqlVar<ReqlDynArray, I> {}
-	impl<const I: usize> ReqlSequence        for ReqlVar<ReqlDynArray, I> {}
-	impl<const I: usize> ReqlArray           for ReqlVar<ReqlDynArray, I> {}
-	impl<const I: usize> ReqlTop             for ReqlVar<ReqlDynSequence, I> {}
-	impl<const I: usize> ReqlSequence        for ReqlVar<ReqlDynSequence, I> {}
-	impl<const I: usize> ReqlTop             for ReqlVar<ReqlDynStream, I> {}
-	impl<const I: usize> ReqlSequence        for ReqlVar<ReqlDynStream, I> {}
-	impl<const I: usize> ReqlStream          for ReqlVar<ReqlDynStream, I> {}
-	impl<const I: usize> ReqlTop             for ReqlVar<ReqlDynStreamSelection, I> {}
-	impl<const I: usize> ReqlSequence        for ReqlVar<ReqlDynStreamSelection, I> {}
-	impl<const I: usize> ReqlStream          for ReqlVar<ReqlDynStreamSelection, I> {}
-	impl<const I: usize> ReqlStreamSelection for ReqlVar<ReqlDynStreamSelection, I> {}
-	impl<const I: usize> ReqlTop             for ReqlVar<ReqlDynTable, I> {}
-	impl<const I: usize> ReqlSequence        for ReqlVar<ReqlDynTable, I> {}
-	impl<const I: usize> ReqlStream          for ReqlVar<ReqlDynTable, I> {}
-	impl<const I: usize> ReqlStreamSelection for ReqlVar<ReqlDynTable, I> {}
-	impl<const I: usize> ReqlTable           for ReqlVar<ReqlDynTable, I> {}
-	impl<const I: usize> ReqlTop             for ReqlVar<ReqlDynDatabase, I> {}
-	impl<const I: usize> ReqlDatabase        for ReqlVar<ReqlDynDatabase, I> {}
-	impl<const I: usize> ReqlTop             for ReqlVar<ReqlDynFunction, I> {}
-	//impl<const I: usize> ReqlFunction        for ReqlVar<ReqlDynFunction, I> {}
-	impl<const I: usize> ReqlTop             for ReqlVar<ReqlDynOrdering, I> {}
-	impl<const I: usize> ReqlOrdering        for ReqlVar<ReqlDynOrdering, I> {}
-	impl<const I: usize> ReqlTop             for ReqlVar<ReqlDynPathSpec, I> {}
-	impl<const I: usize> ReqlPathSpec        for ReqlVar<ReqlDynPathSpec, I> {}
-	impl<const I: usize> ReqlErrorTy         for ReqlVar<ReqlDynError, I> {}
-	
-	pub trait ReqlTypedFunction<A, O>: ReqlTerm {}
-	
-	impl<F: ReqlFunction> ReqlTypedFunction<F::Args, ReqlDynTop> for F where F::Output: ReqlTop {}
-	impl<F: ReqlFunction> ReqlTypedFunction<F::Args, ReqlDynDatum> for F where F::Output: ReqlDatum {}
-	impl<F: ReqlFunction> ReqlTypedFunction<F::Args, ReqlDynNull> for F where F::Output: ReqlNull {}
-	impl<F: ReqlFunction> ReqlTypedFunction<F::Args, ReqlDynBool> for F where F::Output: ReqlBool {}
-	impl<F: ReqlFunction> ReqlTypedFunction<F::Args, ReqlDynNumber> for F where F::Output: ReqlNumber {}
-	impl<F: ReqlFunction> ReqlTypedFunction<F::Args, ReqlDynString> for F where F::Output: ReqlString {}
-	impl<F: ReqlFunction> ReqlTypedFunction<F::Args, ReqlDynObject> for F where F::Output: ReqlObject {}
-	impl<F: ReqlFunction> ReqlTypedFunction<F::Args, ReqlDynSingleSelection> for F where F::Output: ReqlSingleSelection {}
-	impl<F: ReqlFunction> ReqlTypedFunction<F::Args, ReqlDynArray> for F where F::Output: ReqlArray {}
-	impl<F: ReqlFunction> ReqlTypedFunction<F::Args, ReqlDynSequence> for F where F::Output: ReqlSequence {}
-	impl<F: ReqlFunction> ReqlTypedFunction<F::Args, ReqlDynStream> for F where F::Output: ReqlStream {}
-	impl<F: ReqlFunction> ReqlTypedFunction<F::Args, ReqlDynStreamSelection> for F where F::Output: ReqlStreamSelection {}
-	impl<F: ReqlFunction> ReqlTypedFunction<F::Args, ReqlDynTable> for F where F::Output: ReqlTable {}
-	impl<F: ReqlFunction> ReqlTypedFunction<F::Args, ReqlDynDatabase> for F where F::Output: ReqlDatabase {}
-	//impl<F: ReqlFunction> ReqlTypedFunction<F::Args, ReqlDynFunction> for F where F::Output: ReqlFunction {}
-	impl<F: ReqlFunction> ReqlTypedFunction<F::Args, ReqlDynOrdering> for F where F::Output: ReqlOrdering {}
-	impl<F: ReqlFunction> ReqlTypedFunction<F::Args, ReqlDynPathSpec> for F where F::Output: ReqlPathSpec {}
-	impl<F: ReqlFunction> ReqlTypedFunction<F::Args, ReqlDynError> for F where F::Output: ReqlErrorTy {}
 	
 	pub struct ReqlExprObjBuilder(Vec<u8>);
 	
@@ -991,38 +769,289 @@ mod terms {
 	
 	#[macro_export]
 	macro_rules! obj {
-		() => {{ ReqlExpr("{}".to_string()) }};
-		() => [{ ReqlExpr("[]".to_string()) }];
-	    ( $key0:ident: $val0:expr $(, $key:ident: $val:expr )* ) => {{
-			ReqlExpr({
-				let mut buf = Vec::new();
-				std::io::Write::write_all(&mut buf, concat!("{", "\"", stringify!($key0), "\":").as_bytes()).unwrap();
-				$crate::reql::reql_to_string(&mut buf, $val0);
-				
-				$(
-					std::io::Write::write_all(&mut buf, concat!(",\"", stringify!($key), "\":").as_bytes()).unwrap();
-					$crate::reql::reql_to_string(&mut buf, $val);
-				)*
-				
-				buf.push(b'}');
-				String::from_utf8(buf).unwrap()
-			})
-		}};
-		( $val0:ident $(, $val:ident )* ) => [{
-			ReqlExpr(concat!("[", stringify!($val0), $( ",", stringify!($val), )* "]"))
-		}]
-	}
+			() => {{ ReqlExpr("{}".to_string()) }};
+			() => [{ ReqlExpr("[]".to_string()) }];
+			( $key0:ident: $val0:expr $(, $key:ident: $val:expr )* ) => {{
+				ReqlExpr({
+					let mut buf = Vec::new();
+					std::io::Write::write_all(&mut buf, concat!("{", "\"", stringify!($key0), "\":").as_bytes()).unwrap();
+					$crate::reql::reql_to_string(&mut buf, $val0);
+					
+					$(
+						std::io::Write::write_all(&mut buf, concat!(",\"", stringify!($key), "\":").as_bytes()).unwrap();
+						$crate::reql::reql_to_string(&mut buf, $val);
+					)*
+					
+					buf.push(b'}');
+					String::from_utf8(buf).unwrap()
+				})
+			}};
+			( $val0:ident $(, $val:ident )* ) => [{
+				ReqlExpr(concat!("[", stringify!($val0), $( ",", stringify!($val), )* "]"))
+			}]
+		}
 	
 	#[macro_export]
 	macro_rules! func {
-	    (move | $( $ident:ident: $ty:ty ),* | $expr:expr) => {
-	    	(move | $( $ident: $ty, )* | $expr, std::marker::PhantomData::<dyn Fn( $( $ty, )* ) -> _ + Send + Sync + Unpin>)
-	    };
-	    ( | $( $ident:ident: $ty:ty ),* | $expr:expr) => {
-	    	(| $( $ident: $ty, )* | $expr, std::marker::PhantomData::<dyn Fn( $( $ty, )* ) -> _ + Send + Sync + Unpin>)
-	    };
+			(move | $( $ident:ident: $ty:ty ),* | $expr:expr) => {
+				(move | $( $ident: $ty, )* | $expr, std::marker::PhantomData::<dyn Fn( $( $ty, )* ) -> _ + Send + Sync + Unpin>)
+			};
+			( | $( $ident:ident: $ty:ty ),* | $expr:expr) => {
+				(| $( $ident: $ty, )* | $expr, std::marker::PhantomData::<dyn Fn( $( $ty, )* ) -> _ + Send + Sync + Unpin>)
+			};
+		}
+}
+
+mod none {
+	use super::*;
+	
+	#[derive(Copy, Clone, Default, Debug)]
+	pub struct ReqlNoneTerm;
+	
+	impl ReqlTop             for ReqlNoneTerm {}
+	impl ReqlDatum           for ReqlNoneTerm {}
+	impl ReqlNull            for ReqlNoneTerm {}
+	impl ReqlBool            for ReqlNoneTerm {}
+	impl ReqlNumber          for ReqlNoneTerm {}
+	impl ReqlString          for ReqlNoneTerm {}
+	impl ReqlObject          for ReqlNoneTerm {}
+	impl ReqlSingleSelection for ReqlNoneTerm {}
+	impl ReqlArray           for ReqlNoneTerm {}
+	impl ReqlSequence        for ReqlNoneTerm {}
+	impl ReqlStream          for ReqlNoneTerm {}
+	impl ReqlStreamSelection for ReqlNoneTerm {}
+	impl ReqlTable           for ReqlNoneTerm {}
+	impl ReqlDatabase        for ReqlNoneTerm {}
+	impl ReqlFunction        for ReqlNoneTerm { type Args = (); type Output = (); }
+	impl ReqlOrdering        for ReqlNoneTerm {}
+	impl ReqlPathSpec        for ReqlNoneTerm {}
+	impl ReqlErrorTy         for ReqlNoneTerm {}
+	
+	impl ReqlTerm for ReqlNoneTerm {
+		fn serialize(&self, dst: &mut impl Write) -> std::io::Result<()> {
+			write!(dst, "null")
+		}
+	}
+}
+
+mod cast {
+	use super::*;
+	
+	pub struct ReqlOpCast<T: ReqlTerm>(T);
+	
+	impl<T: ReqlTerm> ReqlTop             for ReqlOpCast<T> {}
+	impl<T: ReqlTerm> ReqlDatum           for ReqlOpCast<T> {}
+	impl<T: ReqlTerm> ReqlNull            for ReqlOpCast<T> {}
+	impl<T: ReqlTerm> ReqlBool            for ReqlOpCast<T> {}
+	impl<T: ReqlTerm> ReqlNumber          for ReqlOpCast<T> {}
+	impl<T: ReqlTerm> ReqlString          for ReqlOpCast<T> {}
+	impl<T: ReqlTerm> ReqlObject          for ReqlOpCast<T> {}
+	impl<T: ReqlTerm> ReqlSingleSelection for ReqlOpCast<T> {}
+	impl<T: ReqlTerm> ReqlArray           for ReqlOpCast<T> {}
+	impl<T: ReqlTerm> ReqlSequence        for ReqlOpCast<T> {}
+	impl<T: ReqlTerm> ReqlStream          for ReqlOpCast<T> {}
+	impl<T: ReqlTerm> ReqlStreamSelection for ReqlOpCast<T> {}
+	impl<T: ReqlTerm> ReqlTable           for ReqlOpCast<T> {}
+	impl<T: ReqlTerm> ReqlDatabase        for ReqlOpCast<T> {}
+	//impl<T: ReqlTerm> ReqlFunction        for ReqlOpCast<T> {}
+	impl<T: ReqlTerm> ReqlOrdering        for ReqlOpCast<T> {}
+	impl<T: ReqlTerm> ReqlPathSpec        for ReqlOpCast<T> {}
+	impl<T: ReqlTerm> ReqlErrorTy         for ReqlOpCast<T> {}
+	
+	impl<T: ReqlTerm> ReqlTerm for ReqlOpCast<T> {
+		fn serialize(&self, dst: &mut impl Write) -> std::io::Result<()> {
+			self.0.serialize(dst)
+		}
 	}
 	
+	pub trait ReqlCastInfix: ReqlTerm + Sized {
+		fn cast(self) -> ReqlOpCast<Self> {
+			ReqlOpCast(self)
+		}
+	}
+	
+	impl<T: ReqlTerm> ReqlCastInfix for T {}
+	
+	pub fn reql_to_string(buf: &mut Vec<u8>, term: impl ReqlTerm) {
+		term.serialize(buf).unwrap();
+	}
+}
+
+mod var {
+	use super::*;
+	
+	#[derive(Debug, Default)]
+	pub struct ReqlVar<T, const I: usize>(pub(crate) std::marker::PhantomData<T>);
+	
+	impl<T, const I: usize> Clone for ReqlVar<T, I> {
+		fn clone(&self) -> Self {
+			Self(std::marker::PhantomData)
+		}
+	}
+	
+	impl<T, const I: usize> Copy for ReqlVar<T, I> {}
+	
+	impl<T, const I: usize> ReqlTerm for ReqlVar<T, I> {
+		fn serialize(&self, dst: &mut impl Write) -> std::io::Result<()> {
+			write!(dst, "[10,[{}]]", I)?;
+			Ok(())
+		}
+	}
+	
+	impl<const I: usize> ReqlTop             for ReqlVar<ReqlDynTop, I> {}
+	impl<const I: usize> ReqlTop             for ReqlVar<ReqlDynDatum, I> {}
+	impl<const I: usize> ReqlDatum           for ReqlVar<ReqlDynDatum, I> {}
+	impl<const I: usize> ReqlTop             for ReqlVar<ReqlDynNull, I> {}
+	impl<const I: usize> ReqlDatum           for ReqlVar<ReqlDynNull, I> {}
+	impl<const I: usize> ReqlNull            for ReqlVar<ReqlDynNull, I> {}
+	impl<const I: usize> ReqlTop             for ReqlVar<ReqlDynBool, I> {}
+	impl<const I: usize> ReqlDatum           for ReqlVar<ReqlDynBool, I> {}
+	impl<const I: usize> ReqlBool            for ReqlVar<ReqlDynBool, I> {}
+	impl<const I: usize> ReqlTop             for ReqlVar<ReqlDynNumber, I> {}
+	impl<const I: usize> ReqlNumber          for ReqlVar<ReqlDynNumber, I> {}
+	impl<const I: usize> ReqlDatum           for ReqlVar<ReqlDynNumber, I> {}
+	impl<const I: usize> ReqlString          for ReqlVar<ReqlDynNumber, I> {}
+	impl<const I: usize> ReqlTop             for ReqlVar<ReqlDynObject, I> {}
+	impl<const I: usize> ReqlDatum           for ReqlVar<ReqlDynObject, I> {}
+	impl<const I: usize> ReqlObject          for ReqlVar<ReqlDynObject, I> {}
+	impl<const I: usize> ReqlTop             for ReqlVar<ReqlDynSingleSelection, I> {}
+	impl<const I: usize> ReqlDatum           for ReqlVar<ReqlDynSingleSelection, I> {}
+	impl<const I: usize> ReqlObject          for ReqlVar<ReqlDynSingleSelection, I> {}
+	impl<const I: usize> ReqlSingleSelection for ReqlVar<ReqlDynSingleSelection, I> {}
+	impl<const I: usize> ReqlTop             for ReqlVar<ReqlDynArray, I> {}
+	impl<const I: usize> ReqlDatum           for ReqlVar<ReqlDynArray, I> {}
+	impl<const I: usize> ReqlSequence        for ReqlVar<ReqlDynArray, I> {}
+	impl<const I: usize> ReqlArray           for ReqlVar<ReqlDynArray, I> {}
+	impl<const I: usize> ReqlTop             for ReqlVar<ReqlDynSequence, I> {}
+	impl<const I: usize> ReqlSequence        for ReqlVar<ReqlDynSequence, I> {}
+	impl<const I: usize> ReqlTop             for ReqlVar<ReqlDynStream, I> {}
+	impl<const I: usize> ReqlSequence        for ReqlVar<ReqlDynStream, I> {}
+	impl<const I: usize> ReqlStream          for ReqlVar<ReqlDynStream, I> {}
+	impl<const I: usize> ReqlTop             for ReqlVar<ReqlDynStreamSelection, I> {}
+	impl<const I: usize> ReqlSequence        for ReqlVar<ReqlDynStreamSelection, I> {}
+	impl<const I: usize> ReqlStream          for ReqlVar<ReqlDynStreamSelection, I> {}
+	impl<const I: usize> ReqlStreamSelection for ReqlVar<ReqlDynStreamSelection, I> {}
+	impl<const I: usize> ReqlTop             for ReqlVar<ReqlDynTable, I> {}
+	impl<const I: usize> ReqlSequence        for ReqlVar<ReqlDynTable, I> {}
+	impl<const I: usize> ReqlStream          for ReqlVar<ReqlDynTable, I> {}
+	impl<const I: usize> ReqlStreamSelection for ReqlVar<ReqlDynTable, I> {}
+	impl<const I: usize> ReqlTable           for ReqlVar<ReqlDynTable, I> {}
+	impl<const I: usize> ReqlTop             for ReqlVar<ReqlDynDatabase, I> {}
+	impl<const I: usize> ReqlDatabase        for ReqlVar<ReqlDynDatabase, I> {}
+	impl<const I: usize> ReqlTop             for ReqlVar<ReqlDynFunction, I> {}
+	//impl<const I: usize> ReqlFunction        for ReqlVar<ReqlDynFunction, I> {}
+	impl<const I: usize> ReqlTop             for ReqlVar<ReqlDynOrdering, I> {}
+	impl<const I: usize> ReqlOrdering        for ReqlVar<ReqlDynOrdering, I> {}
+	impl<const I: usize> ReqlTop             for ReqlVar<ReqlDynPathSpec, I> {}
+	impl<const I: usize> ReqlPathSpec        for ReqlVar<ReqlDynPathSpec, I> {}
+	impl<const I: usize> ReqlErrorTy         for ReqlVar<ReqlDynError, I> {}
+}
+
+mod var_args {
+	use super::*;
+	
+	pub trait VarArgsSerializable {
+		fn serialize(&self, dst: &mut impl Write) -> std::io::Result<()>;
+	}
+	
+	pub trait VarArgsTrait<T>: VarArgsSerializable {}
+	
+	/*impl<T: VarArgsSerializable + ReqlTop> VarArgsTrait<ReqlDynTop> for T {}
+	
+	
+	impl<T: ReqlTerm> ReqlTop             for ReqlOpCast<T> {}
+	impl<T: ReqlTerm> ReqlDatum           for ReqlOpCast<T> {}
+	impl<T: ReqlTerm> ReqlNull            for ReqlOpCast<T> {}
+	impl<T: ReqlTerm> ReqlBool            for ReqlOpCast<T> {}
+	impl<T: ReqlTerm> ReqlNumber          for ReqlOpCast<T> {}
+	impl<T: ReqlTerm> ReqlString          for ReqlOpCast<T> {}
+	impl<T: ReqlTerm> ReqlObject          for ReqlOpCast<T> {}
+	impl<T: ReqlTerm> ReqlSingleSelection for ReqlOpCast<T> {}
+	impl<T: ReqlTerm> ReqlArray           for ReqlOpCast<T> {}
+	impl<T: ReqlTerm> ReqlSequence        for ReqlOpCast<T> {}
+	impl<T: ReqlTerm> ReqlStream          for ReqlOpCast<T> {}
+	impl<T: ReqlTerm> ReqlStreamSelection for ReqlOpCast<T> {}
+	impl<T: ReqlTerm> ReqlTable           for ReqlOpCast<T> {}
+	impl<T: ReqlTerm> ReqlDatabase        for ReqlOpCast<T> {}
+	//impl<T: ReqlTerm> ReqlFunction        for ReqlOpCast<T> {}
+	impl<T: ReqlTerm> ReqlOrdering        for ReqlOpCast<T> {}
+	impl<T: ReqlTerm> ReqlPathSpec        for ReqlOpCast<T> {}
+	impl<T: ReqlTerm> ReqlErrorTy         for ReqlOpCast<T> {}
+	
+	impl<'a> VarArgsTrait<ReqlDynDatum> for &'a String {}
+	impl<'a> VarArgsSerializable for &'a String {
+		fn serialize(&self, dst: &mut impl Write) -> std::io::Result<()> {
+			<Self as ReqlTerm>::serialize(self, dst)
+		}
+	}
+	*/
+	
+	macro_rules! varargs {
+		( $head:ident, ) => {};
+		( $head:ident $(, $tail:ident )*, ) => {
+			varargs!( $( $tail, )* );
+		
+			impl< $head: ReqlTop      $(, $tail: ReqlTop      )* > VarArgsTrait<ReqlDynTop>      for ( $head $(, $tail )* ) {}
+			impl< $head: ReqlDatum    $(, $tail: ReqlDatum    )* > VarArgsTrait<ReqlDynDatum>    for ( $head $(, $tail )* ) {}
+			impl< $head: ReqlNull     $(, $tail: ReqlNull     )* > VarArgsTrait<ReqlDynNull>     for ( $head $(, $tail )* ) {}
+			impl< $head: ReqlBool     $(, $tail: ReqlBool     )* > VarArgsTrait<ReqlDynBool>     for ( $head $(, $tail )* ) {}
+			impl< $head: ReqlNumber   $(, $tail: ReqlNumber   )* > VarArgsTrait<ReqlDynNumber>   for ( $head $(, $tail )* ) {}
+			impl< $head: ReqlString   $(, $tail: ReqlString   )* > VarArgsTrait<ReqlDynString>   for ( $head $(, $tail )* ) {}
+			impl< $head: ReqlObject   $(, $tail: ReqlObject   )* > VarArgsTrait<ReqlDynObject>   for ( $head $(, $tail )* ) {}
+			impl< $head: ReqlArray    $(, $tail: ReqlArray    )* > VarArgsTrait<ReqlDynArray>    for ( $head $(, $tail )* ) {}
+			impl< $head: ReqlSequence $(, $tail: ReqlSequence )* > VarArgsTrait<ReqlDynSequence> for ( $head $(, $tail )* ) {}
+			impl< $head: ReqlPathSpec $(, $tail: ReqlPathSpec )* > VarArgsTrait<ReqlDynPathSpec> for ( $head $(, $tail )* ) {}
+			
+			impl< $head: ReqlTerm $(, $tail: ReqlTerm )* > VarArgsSerializable for ( $head $(, $tail )* ) {
+				#[allow(non_snake_case, unused_variables)]
+				fn serialize(&self, dst: &mut impl Write) -> std::io::Result<()> {
+					let ( $head $(, $tail )* ) = self;
+					$head.serialize(dst)?;
+					
+					$(
+						dst.write_all(b",")?;
+						$tail.serialize(dst)?;
+					)*
+					
+					Ok(())
+				}
+			}
+		};
+	}
+	
+	varargs!(A0, A1, A2, A3, A4, A5, A6, A7, A8, A9, A10, A11, A12, A13, A14, A15, );
+}
+
+mod typed_fn {
+	use super::*;
+	
+	pub trait ReqlTypedFunction<A, O>: ReqlTerm {}
+	
+	impl<F: ReqlFunction> ReqlTypedFunction<F::Args, ReqlDynTop> for F where F::Output: ReqlTop {}
+	impl<F: ReqlFunction> ReqlTypedFunction<F::Args, ReqlDynDatum> for F where F::Output: ReqlDatum {}
+	impl<F: ReqlFunction> ReqlTypedFunction<F::Args, ReqlDynNull> for F where F::Output: ReqlNull {}
+	impl<F: ReqlFunction> ReqlTypedFunction<F::Args, ReqlDynBool> for F where F::Output: ReqlBool {}
+	impl<F: ReqlFunction> ReqlTypedFunction<F::Args, ReqlDynNumber> for F where F::Output: ReqlNumber {}
+	impl<F: ReqlFunction> ReqlTypedFunction<F::Args, ReqlDynString> for F where F::Output: ReqlString {}
+	impl<F: ReqlFunction> ReqlTypedFunction<F::Args, ReqlDynObject> for F where F::Output: ReqlObject {}
+	impl<F: ReqlFunction> ReqlTypedFunction<F::Args, ReqlDynSingleSelection> for F where F::Output: ReqlSingleSelection {}
+	impl<F: ReqlFunction> ReqlTypedFunction<F::Args, ReqlDynArray> for F where F::Output: ReqlArray {}
+	impl<F: ReqlFunction> ReqlTypedFunction<F::Args, ReqlDynSequence> for F where F::Output: ReqlSequence {}
+	impl<F: ReqlFunction> ReqlTypedFunction<F::Args, ReqlDynStream> for F where F::Output: ReqlStream {}
+	impl<F: ReqlFunction> ReqlTypedFunction<F::Args, ReqlDynStreamSelection> for F where F::Output: ReqlStreamSelection {}
+	impl<F: ReqlFunction> ReqlTypedFunction<F::Args, ReqlDynTable> for F where F::Output: ReqlTable {}
+	impl<F: ReqlFunction> ReqlTypedFunction<F::Args, ReqlDynDatabase> for F where F::Output: ReqlDatabase {}
+	//impl<F: ReqlFunction> ReqlTypedFunction<F::Args, ReqlDynFunction> for F where F::Output: ReqlFunction {}
+	impl<F: ReqlFunction> ReqlTypedFunction<F::Args, ReqlDynOrdering> for F where F::Output: ReqlOrdering {}
+	impl<F: ReqlFunction> ReqlTypedFunction<F::Args, ReqlDynPathSpec> for F where F::Output: ReqlPathSpec {}
+	impl<F: ReqlFunction> ReqlTypedFunction<F::Args, ReqlDynError> for F where F::Output: ReqlErrorTy {}
+}
+
+mod terms {
+	#![allow(clippy::wrong_self_convention)]
+
+	use {super::*, std::{marker::PhantomData, io::Result}};
+
 	#[macro_export]
 	macro_rules! reql_impl_traits {
 		(impl $trait:ident for $struct_name:ident) => {
@@ -1168,7 +1197,7 @@ mod terms {
 			reql_impl_traits!(impl $out for $struct_name<>);
 			
 			impl ReqlTerm for $struct_name {
-				fn serialize(&self, dst: &mut impl std::io::Write) -> std::io::Result<()> {
+				fn serialize(&self, dst: &mut impl Write) -> std::io::Result<()> {
 					write!(dst, "[{},[]]", $id)
 				}
 			}
@@ -1182,7 +1211,7 @@ mod terms {
 			reql_impl_traits!(impl $out for $struct_name< $arg0_type: $arg0_trait, $( $arg_type: $arg_trait, )* >);
 			
 			impl< $arg0_type: $arg0_trait, $( $arg_type: $arg_trait, )* > ReqlTerm for $struct_name< $arg0_type, $( $arg_type, )* > {
-				fn serialize(&self, dst: &mut impl std::io::Write) -> std::io::Result<()> {
+				fn serialize(&self, dst: &mut impl Write) -> std::io::Result<()> {
 					let Self( $arg0_name, $( $arg_name, )* ) = self;
 					write!(dst, "[{},[", $id)?;
 					$arg0_name.serialize(dst)?;
@@ -1228,7 +1257,7 @@ mod terms {
 			}
 			
 			impl< $( $optarg_type: $optarg_trait, )* > ReqlTerm for $struct_name< $( $optarg_type, )* > {
-				fn serialize(&self, dst: &mut impl std::io::Write) -> std::io::Result<()> {
+				fn serialize(&self, dst: &mut impl Write) -> std::io::Result<()> {
 					let Self($( $optarg_name, )* ) = self;
 					
 					if false $( || $optarg_name.is_some() )* {
@@ -1274,7 +1303,7 @@ mod terms {
 			}
 			
 			impl< $arg0_type: $arg0_trait, $( $arg_type: $arg_trait, )* $( $optarg_type: $optarg_trait, )* > ReqlTerm for $struct_name< $arg0_type, $( $arg_type, )* $( $optarg_type, )* > {
-				fn serialize(&self, dst: &mut impl std::io::Write) -> std::io::Result<()> {
+				fn serialize(&self, dst: &mut impl Write) -> std::io::Result<()> {
 					let Self( $arg0_name, $( $arg_name, )* $( $optarg_name, )* ) = self;
 					write!(dst, "[{},[", $id)?;
 					$arg0_name.serialize(dst)?;
@@ -1297,7 +1326,7 @@ mod terms {
 							}
 						)*
 						
-						if !buf.is_empty() {
+						if !Vec::is_empty(&buf) {
 							buf.pop();
 							dst.write_all(&buf)?;
 						}
