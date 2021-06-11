@@ -1363,7 +1363,7 @@ mod terms {
 	term!(ReqlOpReduce           =  37, ReqlReduceInfix,           fn reduce(s: S; ReqlSequence, f: F; ReqlTypedFunction<(ReqlDynDatum, ReqlDynDatum), ReqlDynDatum>) -> ReqlDatum);
 	term!(ReqlOpMap              =  38, ReqlMapInfix,              fn map(s: S; ReqlSequence, f: F; ReqlTypedFunction<ReqlDynDatum, ReqlDynDatum>) -> ReqlSequence);
 	term!(ReqlOpFilter           =  39, ReqlFilterInfix,           fn filter(s: S; ReqlSequence, o: O; ReqlObject) -> ReqlSequence);
-	term!(ReqlOpFilterWith       =  39, ReqlFilterWithInfix,       fn filter_with(s: S; ReqlSequence, f: F; ReqlTypedFunction<ReqlDynDatum, ReqlDynDatum>) -> ReqlSequence);
+	term!(ReqlOpFilterWith       =  39, ReqlFilterWithInfix,       fn filter_with(s: S; ReqlSequence, f: F; ReqlTypedFunction<ReqlDynDatum, ReqlDynBool>) -> ReqlSequence);
 	term!(ReqlOpConcatMap        =  40, ReqlConcatMapInfix,        fn concat_map(s: S; ReqlSequence, f: F; ReqlTypedFunction<ReqlDynDatum, ReqlDynSequence>) -> ReqlSequence);
 	term!(ReqlOpOrderBy          =  41, ReqlOrderByInfix,          fn order_by(s: S; ReqlSequence, o: O; ReqlOrdering) OrderByOptions { index: I; ReqlOrdering, } -> ReqlSequence);
 	term!(ReqlOpDistinct         =  42, ReqlDistinctInfix,         fn distinct(s: S; ReqlSequence) -> ReqlSequence);
