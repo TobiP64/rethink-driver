@@ -500,8 +500,6 @@ mod result {
 }
 
 mod types {
-	#![allow(dead_code, clippy::wrong_self_convention)]
-	
 	pub use super::*;
 	
 	pub trait ReqlTop:             ReqlTerm {}
@@ -564,28 +562,42 @@ mod primitives {
 		}
 	}
 	
-	macro_rules! reql_number_impl {
-			( $( $ty:ty ),* ) => {
-				$(
-					impl ReqlTop for $ty {}
-					impl ReqlDatum for $ty {}
-					impl ReqlNumber for $ty {}
-					impl ReqlTerm for $ty {
-						fn serialize(&self, dst: &mut impl Write) -> std::io::Result<()> {
-							write!(dst, "{}", self)
-						}
-					}
-				)*
-			};
+	impl VarArgsTrait<ReqlDynTop> for bool {}
+	impl VarArgsTrait<ReqlDynDatum> for bool {}
+	impl VarArgsTrait<ReqlDynBool> for bool {}
+	impl VarArgsSerializable for bool {
+		fn serialize(&self, dst: &mut impl Write) -> std::io::Result<()> {
+			<Self as ReqlTerm>::serialize(self, dst)
 		}
+	}
+	
+	macro_rules! reql_number_impl {
+		( $( $ty:ty ),* ) => {
+			$(
+				impl ReqlTop for $ty {}
+				impl ReqlDatum for $ty {}
+				impl ReqlNumber for $ty {}
+				impl ReqlTerm for $ty {
+					fn serialize(&self, dst: &mut impl Write) -> std::io::Result<()> {
+						write!(dst, "{}", self)
+					}
+				}
+			
+				impl VarArgsTrait<ReqlDynTop> for $ty {}
+				impl VarArgsTrait<ReqlDynDatum> for $ty {}
+				impl VarArgsTrait<ReqlDynNumber> for $ty {}
+				impl VarArgsSerializable for $ty {
+					fn serialize(&self, dst: &mut impl Write) -> std::io::Result<()> {
+						<Self as ReqlTerm>::serialize(self, dst)
+					}
+				}
+			)*
+		};
+	}
 	
 	reql_number_impl!(i8, i16, i32, i64, i128, isize, u8, u16, u32, u64, u128, usize, f32, f64);
 	
-	impl<T: ReqlTop> ReqlTop      for [T] {}
-	impl<T: ReqlTop> ReqlDatum    for [T] {}
-	impl<T: ReqlTop> ReqlSequence for [T] {}
-	impl<T: ReqlTop> ReqlArray    for [T] {}
-	impl<T: ReqlTop> ReqlTerm     for [T] {
+	impl<T: ReqlTop> ReqlTerm for [T] {
 		fn serialize(&self, dst: &mut impl Write) -> std::io::Result<()> {
 			if self.is_empty() {
 				return dst.write_all(b"[2, []]");
@@ -604,28 +616,39 @@ mod primitives {
 	}
 	
 	macro_rules! reql_array_impl {
-			( $( < $( $lifetime:lifetime ),* > $ty:ty ),* ) => {
-				$(
-					impl< $( $lifetime, )* T: ReqlTop> ReqlTop      for $ty {}
-					impl< $( $lifetime, )* T: ReqlTop> ReqlDatum    for $ty {}
-					impl< $( $lifetime, )* T: ReqlTop> ReqlSequence for $ty {}
-					impl< $( $lifetime, )* T: ReqlTop> ReqlArray    for $ty {}
-					impl< $( $lifetime, )* T: ReqlTop> ReqlTerm     for $ty {
-						fn serialize(&self, dst: &mut impl Write) -> std::io::Result<()> {
-							<[T] as ReqlTerm>::serialize(&*self, dst)
-						}
+		(@internal $( < $( $lifetime:lifetime ),* > $ty:ty )? ) => {};
+		(@internal ser $( < $( $lifetime:lifetime ),* > $ty:ty )? ) => {
+			$(
+				impl< $( $lifetime, )* T: ReqlTop> ReqlTerm     for $ty {
+					fn serialize(&self, dst: &mut impl Write) -> std::io::Result<()> {
+						<[T] as ReqlTerm>::serialize(&*self, dst)
 					}
-				)*
-			};
-		}
+				}
+			)*
+		};
+		( $( $( $ident:ident )? < $( $lifetime:lifetime ),* > $ty:ty ),* ) => {
+			$(
+				impl< $( $lifetime, )* T: ReqlTop> ReqlTop      for $ty {}
+				impl< $( $lifetime, )* T: ReqlTop> ReqlDatum    for $ty {}
+				impl< $( $lifetime, )* T: ReqlTop> ReqlSequence for $ty {}
+				impl< $( $lifetime, )* T: ReqlTop> ReqlArray    for $ty {}
+				reql_array_impl!(@internal $( $ident )? < $( $lifetime ),* > $ty );
+			
+				impl< $( $lifetime, )* T: ReqlTop> VarArgsTrait<ReqlDynTop>      for $ty {}
+				impl< $( $lifetime, )* T: ReqlTop> VarArgsTrait<ReqlDynDatum>    for $ty {}
+				impl< $( $lifetime, )* T: ReqlTop> VarArgsTrait<ReqlDynSequence> for $ty {}
+				impl< $( $lifetime, )* T: ReqlTop> VarArgsTrait<ReqlDynArray>    for $ty {}
+				impl< $( $lifetime, )* T: ReqlTop> VarArgsSerializable           for $ty {
+					fn serialize(&self, dst: &mut impl Write) -> std::io::Result<()> {
+						<[T] as ReqlTerm>::serialize(&*self, dst)
+					}
+				}
+			)*
+		};
+	}
 	
-	reql_array_impl!(<'a> &'a [T], <> Vec<T>, <'a> &'a Vec<T>);
+	reql_array_impl!(<> [T], ser <'a> &'a [T], ser <> Vec<T>, ser <'a> &'a Vec<T>);
 	
-	
-	impl ReqlTop for str {}
-	impl ReqlDatum for str {}
-	impl ReqlString for str {}
-	impl ReqlPathSpec for str {}
 	impl ReqlTerm for str {
 		fn serialize(&self, dst: &mut impl Write) -> std::io::Result<()> {
 			write!(dst, "\"{}\"", self)
@@ -633,37 +656,38 @@ mod primitives {
 	}
 	
 	macro_rules! reql_str_impl {
-			( $( < $( $lifetime:lifetime ),* > $ty:ty ),* ) => {
-				$(
-					impl< $( $lifetime, )* > ReqlTop      for $ty {}
-					impl< $( $lifetime, )* > ReqlDatum    for $ty {}
-					impl< $( $lifetime, )* > ReqlString   for $ty {}
-					impl< $( $lifetime, )* > ReqlPathSpec for $ty {}
-					impl< $( $lifetime, )* > ReqlTerm     for $ty {
-						fn serialize(&self, dst: &mut impl Write) -> std::io::Result<()> {
-							<str as ReqlTerm>::serialize(&*self, dst)
-						}
+		(@internal $( < $( $lifetime:lifetime ),* > $ty:ty )? ) => {};
+		(@internal ser $( < $( $lifetime:lifetime ),* > $ty:ty )? ) => {
+			$(
+				impl< $( $lifetime, )*> ReqlTerm     for $ty {
+					fn serialize(&self, dst: &mut impl Write) -> std::io::Result<()> {
+						<str as ReqlTerm>::serialize(&*self, dst)
 					}
-				)*
-			};
-		}
-	
-	reql_str_impl!(<'a> &'a str, <> String, <'a> &'a String);
-	
-	/*impl<'a> VarArgsTrait<ReqlDynDatum> for &'a str {}
-	impl<'a> VarArgsTrait<ReqlDynPathSpec> for &'a str {}
-	impl<'a> VarArgsSerializable for &'a str {
-		fn serialize(&self, dst: &mut impl Write) -> std::io::Result<()> {
-			<Self as ReqlTerm>::serialize(self, dst)
-		}
+				}
+			)*
+		};
+		( $( $( $ident:ident )? < $( $lifetime:lifetime ),* > $ty:ty ),* ) => {
+			$(
+				impl< $( $lifetime, )* > ReqlTop      for $ty {}
+				impl< $( $lifetime, )* > ReqlDatum    for $ty {}
+				impl< $( $lifetime, )* > ReqlString   for $ty {}
+				impl< $( $lifetime, )* > ReqlPathSpec for $ty {}
+				reql_str_impl!(@internal $( $ident )? < $( $lifetime ),* > $ty );
+			
+				impl< $( $lifetime, )* > VarArgsTrait<ReqlDynTop>      for $ty {}
+				impl< $( $lifetime, )* > VarArgsTrait<ReqlDynDatum>    for $ty {}
+				impl< $( $lifetime, )* > VarArgsTrait<ReqlDynString>   for $ty {}
+				impl< $( $lifetime, )* > VarArgsTrait<ReqlDynPathSpec> for $ty {}
+				impl< $( $lifetime, )* > VarArgsSerializable        for $ty {
+					fn serialize(&self, dst: &mut impl Write) -> std::io::Result<()> {
+						<str as ReqlTerm>::serialize(&*self, dst)
+					}
+				}
+			)*
+		};
 	}
 	
-	impl<'a> VarArgsTrait<ReqlDynDatum> for &'a String {}
-	impl<'a> VarArgsSerializable for &'a String {
-		fn serialize(&self, dst: &mut impl Write) -> std::io::Result<()> {
-			<Self as ReqlTerm>::serialize(self, dst)
-		}
-	}*/
+	reql_str_impl!(<> str, ser <'a> &'a str, ser <> String, ser <'a> &'a String);
 	
 	impl ReqlTop for RDbId {}
 	impl ReqlDatum for RDbId {}
@@ -769,37 +793,37 @@ mod expr {
 	
 	#[macro_export]
 	macro_rules! obj {
-			() => {{ ReqlExpr("{}".to_string()) }};
-			() => [{ ReqlExpr("[]".to_string()) }];
-			( $key0:ident: $val0:expr $(, $key:ident: $val:expr )* ) => {{
-				ReqlExpr({
-					let mut buf = Vec::new();
-					std::io::Write::write_all(&mut buf, concat!("{", "\"", stringify!($key0), "\":").as_bytes()).unwrap();
-					$crate::reql::reql_to_string(&mut buf, $val0);
-					
-					$(
-						std::io::Write::write_all(&mut buf, concat!(",\"", stringify!($key), "\":").as_bytes()).unwrap();
-						$crate::reql::reql_to_string(&mut buf, $val);
-					)*
-					
-					buf.push(b'}');
-					String::from_utf8(buf).unwrap()
-				})
-			}};
-			( $val0:ident $(, $val:ident )* ) => [{
-				ReqlExpr(concat!("[", stringify!($val0), $( ",", stringify!($val), )* "]"))
-			}]
-		}
+		() => {{ ReqlExpr("{}".to_string()) }};
+		() => [{ ReqlExpr("[]".to_string()) }];
+		( $key0:ident: $val0:expr $(, $key:ident: $val:expr )* ) => {{
+			ReqlExpr({
+				let mut buf = Vec::new();
+				std::io::Write::write_all(&mut buf, concat!("{", "\"", stringify!($key0), "\":").as_bytes()).unwrap();
+				$crate::reql::reql_to_string(&mut buf, $val0);
+				
+				$(
+					std::io::Write::write_all(&mut buf, concat!(",\"", stringify!($key), "\":").as_bytes()).unwrap();
+					$crate::reql::reql_to_string(&mut buf, $val);
+				)*
+				
+				buf.push(b'}');
+				String::from_utf8(buf).unwrap()
+			})
+		}};
+		( $val0:ident $(, $val:ident )* ) => [{
+			ReqlExpr(concat!("[", stringify!($val0), $( ",", stringify!($val), )* "]"))
+		}]
+	}
 	
 	#[macro_export]
 	macro_rules! func {
-			(move | $( $ident:ident: $ty:ty ),* | $expr:expr) => {
-				(move | $( $ident: $ty, )* | $expr, std::marker::PhantomData::<dyn Fn( $( $ty, )* ) -> _ + Send + Sync + Unpin>)
-			};
-			( | $( $ident:ident: $ty:ty ),* | $expr:expr) => {
-				(| $( $ident: $ty, )* | $expr, std::marker::PhantomData::<dyn Fn( $( $ty, )* ) -> _ + Send + Sync + Unpin>)
-			};
-		}
+		(move | $( $ident:ident: $ty:ty ),* | $expr:expr) => {
+			(move | $( $ident: $ty, )* | $expr, std::marker::PhantomData::<dyn Fn( $( $ty, )* ) -> _ + Send + Sync + Unpin>)
+		};
+		( | $( $ident:ident: $ty:ty ),* | $expr:expr) => {
+			(| $( $ident: $ty, )* | $expr, std::marker::PhantomData::<dyn Fn( $( $ty, )* ) -> _ + Send + Sync + Unpin>)
+		};
+	}
 }
 
 mod none {
@@ -955,36 +979,6 @@ mod var_args {
 	}
 	
 	pub trait VarArgsTrait<T>: VarArgsSerializable {}
-	
-	/*impl<T: VarArgsSerializable + ReqlTop> VarArgsTrait<ReqlDynTop> for T {}
-	
-	
-	impl<T: ReqlTerm> ReqlTop             for ReqlOpCast<T> {}
-	impl<T: ReqlTerm> ReqlDatum           for ReqlOpCast<T> {}
-	impl<T: ReqlTerm> ReqlNull            for ReqlOpCast<T> {}
-	impl<T: ReqlTerm> ReqlBool            for ReqlOpCast<T> {}
-	impl<T: ReqlTerm> ReqlNumber          for ReqlOpCast<T> {}
-	impl<T: ReqlTerm> ReqlString          for ReqlOpCast<T> {}
-	impl<T: ReqlTerm> ReqlObject          for ReqlOpCast<T> {}
-	impl<T: ReqlTerm> ReqlSingleSelection for ReqlOpCast<T> {}
-	impl<T: ReqlTerm> ReqlArray           for ReqlOpCast<T> {}
-	impl<T: ReqlTerm> ReqlSequence        for ReqlOpCast<T> {}
-	impl<T: ReqlTerm> ReqlStream          for ReqlOpCast<T> {}
-	impl<T: ReqlTerm> ReqlStreamSelection for ReqlOpCast<T> {}
-	impl<T: ReqlTerm> ReqlTable           for ReqlOpCast<T> {}
-	impl<T: ReqlTerm> ReqlDatabase        for ReqlOpCast<T> {}
-	//impl<T: ReqlTerm> ReqlFunction        for ReqlOpCast<T> {}
-	impl<T: ReqlTerm> ReqlOrdering        for ReqlOpCast<T> {}
-	impl<T: ReqlTerm> ReqlPathSpec        for ReqlOpCast<T> {}
-	impl<T: ReqlTerm> ReqlErrorTy         for ReqlOpCast<T> {}
-	
-	impl<'a> VarArgsTrait<ReqlDynDatum> for &'a String {}
-	impl<'a> VarArgsSerializable for &'a String {
-		fn serialize(&self, dst: &mut impl Write) -> std::io::Result<()> {
-			<Self as ReqlTerm>::serialize(self, dst)
-		}
-	}
-	*/
 	
 	macro_rules! varargs {
 		( $head:ident, ) => {};
