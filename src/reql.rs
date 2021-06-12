@@ -516,7 +516,7 @@ mod types {
 	pub trait ReqlStreamSelection: ReqlStream {}
 	pub trait ReqlTable:           ReqlStreamSelection {}
 	pub trait ReqlDatabase:        ReqlTop {}
-	pub trait ReqlFunction:        ReqlTop { type Args; type Output; }
+	pub trait ReqlFunction<Args>:  ReqlTop { type Output; }
 	pub trait ReqlOrdering:        ReqlTop {}
 	pub trait ReqlPathSpec:        ReqlTop {}
 	pub trait ReqlErrorTy:         ReqlTerm {}
@@ -620,6 +620,16 @@ mod primitives {
 	}
 	
 	reql_array_impl!(<> [T], ser <'a> &'a [T], ser <> Vec<T>, ser <'a> &'a Vec<T>);
+	
+	impl<T: ReqlTop, const N: usize> ReqlTop      for [T; N] {}
+	impl<T: ReqlTop, const N: usize> ReqlDatum    for [T; N] {}
+	impl<T: ReqlTop, const N: usize> ReqlSequence for [T; N] {}
+	impl<T: ReqlTop, const N: usize> ReqlArray    for [T; N] {}
+	impl<T: ReqlTop, const N: usize> ReqlTerm     for [T; N] {
+		fn serialize(&self, dst: &mut impl Write) -> std::io::Result<()> {
+			<[T] as ReqlTerm>::serialize(&*self, dst)
+		}
+	}
 	
 	impl ReqlTerm for str {
 		fn serialize(&self, dst: &mut impl Write) -> std::io::Result<()> {
@@ -778,13 +788,20 @@ mod expr {
 	}
 	
 	#[macro_export]
-	macro_rules! func {
+	macro_rules! expr {
 		(move | $( $ident:ident: $ty:ty ),* | $expr:expr) => {
 			(move | $( $ident: $ty, )* | $expr, std::marker::PhantomData::<dyn Fn( $( $ty, )* ) -> _ + Send + Sync + Unpin>)
 		};
 		( | $( $ident:ident: $ty:ty ),* | $expr:expr) => {
 			(| $( $ident: $ty, )* | $expr, std::marker::PhantomData::<dyn Fn( $( $ty, )* ) -> _ + Send + Sync + Unpin>)
 		};
+		(if ( $cond:expr ) { $expr0:expr } else { $expr1:expr } ) => {
+			branch($cond, $expr0, $expr1)
+		};
+		(if ( $cond:expr ) { $expr0:expr } ) => {
+			branch($cond, $expr0, ())
+		};
+		( $expr:expr ) => { ReqlExpr::from($expr) };
 	}
 }
 
@@ -808,14 +825,14 @@ mod none {
 	impl ReqlStreamSelection for ReqlNoneTerm {}
 	impl ReqlTable           for ReqlNoneTerm {}
 	impl ReqlDatabase        for ReqlNoneTerm {}
-	impl ReqlFunction        for ReqlNoneTerm { type Args = (); type Output = (); }
+	impl<Args> ReqlFunction<Args>  for ReqlNoneTerm { type Output = (); }
 	impl ReqlOrdering        for ReqlNoneTerm {}
 	impl ReqlPathSpec        for ReqlNoneTerm {}
 	impl ReqlErrorTy         for ReqlNoneTerm {}
 	
 	impl ReqlTerm for ReqlNoneTerm {
-		fn serialize(&self, dst: &mut impl Write) -> std::io::Result<()> {
-			write!(dst, "null")
+		fn serialize(&self, _dst: &mut impl Write) -> std::io::Result<()> {
+			unreachable!()
 		}
 	}
 }
@@ -1004,24 +1021,24 @@ mod typed_fn {
 	
 	pub trait ReqlTypedFunction<A, O>: ReqlTerm {}
 	
-	impl<F: ReqlFunction> ReqlTypedFunction<F::Args, ReqlDynTop> for F where F::Output: ReqlTop {}
-	impl<F: ReqlFunction> ReqlTypedFunction<F::Args, ReqlDynDatum> for F where F::Output: ReqlDatum {}
-	impl<F: ReqlFunction> ReqlTypedFunction<F::Args, ReqlDynNull> for F where F::Output: ReqlNull {}
-	impl<F: ReqlFunction> ReqlTypedFunction<F::Args, ReqlDynBool> for F where F::Output: ReqlBool {}
-	impl<F: ReqlFunction> ReqlTypedFunction<F::Args, ReqlDynNumber> for F where F::Output: ReqlNumber {}
-	impl<F: ReqlFunction> ReqlTypedFunction<F::Args, ReqlDynString> for F where F::Output: ReqlString {}
-	impl<F: ReqlFunction> ReqlTypedFunction<F::Args, ReqlDynObject> for F where F::Output: ReqlObject {}
-	impl<F: ReqlFunction> ReqlTypedFunction<F::Args, ReqlDynSingleSelection> for F where F::Output: ReqlSingleSelection {}
-	impl<F: ReqlFunction> ReqlTypedFunction<F::Args, ReqlDynArray> for F where F::Output: ReqlArray {}
-	impl<F: ReqlFunction> ReqlTypedFunction<F::Args, ReqlDynSequence> for F where F::Output: ReqlSequence {}
-	impl<F: ReqlFunction> ReqlTypedFunction<F::Args, ReqlDynStream> for F where F::Output: ReqlStream {}
-	impl<F: ReqlFunction> ReqlTypedFunction<F::Args, ReqlDynStreamSelection> for F where F::Output: ReqlStreamSelection {}
-	impl<F: ReqlFunction> ReqlTypedFunction<F::Args, ReqlDynTable> for F where F::Output: ReqlTable {}
-	impl<F: ReqlFunction> ReqlTypedFunction<F::Args, ReqlDynDatabase> for F where F::Output: ReqlDatabase {}
-	//impl<F: ReqlFunction> ReqlTypedFunction<F::Args, ReqlDynFunction> for F where F::Output: ReqlFunction {}
-	impl<F: ReqlFunction> ReqlTypedFunction<F::Args, ReqlDynOrdering> for F where F::Output: ReqlOrdering {}
-	impl<F: ReqlFunction> ReqlTypedFunction<F::Args, ReqlDynPathSpec> for F where F::Output: ReqlPathSpec {}
-	impl<F: ReqlFunction> ReqlTypedFunction<F::Args, ReqlDynError> for F where F::Output: ReqlErrorTy {}
+	impl<F: ReqlFunction<Args>, Args> ReqlTypedFunction<Args, ReqlDynTop> for F where F::Output: ReqlTop {}
+	impl<F: ReqlFunction<Args>, Args> ReqlTypedFunction<Args, ReqlDynDatum> for F where F::Output: ReqlDatum {}
+	impl<F: ReqlFunction<Args>, Args> ReqlTypedFunction<Args, ReqlDynNull> for F where F::Output: ReqlNull {}
+	impl<F: ReqlFunction<Args>, Args> ReqlTypedFunction<Args, ReqlDynBool> for F where F::Output: ReqlBool {}
+	impl<F: ReqlFunction<Args>, Args> ReqlTypedFunction<Args, ReqlDynNumber> for F where F::Output: ReqlNumber {}
+	impl<F: ReqlFunction<Args>, Args> ReqlTypedFunction<Args, ReqlDynString> for F where F::Output: ReqlString {}
+	impl<F: ReqlFunction<Args>, Args> ReqlTypedFunction<Args, ReqlDynObject> for F where F::Output: ReqlObject {}
+	impl<F: ReqlFunction<Args>, Args> ReqlTypedFunction<Args, ReqlDynSingleSelection> for F where F::Output: ReqlSingleSelection {}
+	impl<F: ReqlFunction<Args>, Args> ReqlTypedFunction<Args, ReqlDynArray> for F where F::Output: ReqlArray {}
+	impl<F: ReqlFunction<Args>, Args> ReqlTypedFunction<Args, ReqlDynSequence> for F where F::Output: ReqlSequence {}
+	impl<F: ReqlFunction<Args>, Args> ReqlTypedFunction<Args, ReqlDynStream> for F where F::Output: ReqlStream {}
+	impl<F: ReqlFunction<Args>, Args> ReqlTypedFunction<Args, ReqlDynStreamSelection> for F where F::Output: ReqlStreamSelection {}
+	impl<F: ReqlFunction<Args>, Args> ReqlTypedFunction<Args, ReqlDynTable> for F where F::Output: ReqlTable {}
+	impl<F: ReqlFunction<Args>, Args> ReqlTypedFunction<Args, ReqlDynDatabase> for F where F::Output: ReqlDatabase {}
+	//impl<F: ReqlFunction<Args>, Args> ReqlTypedFunction<Args, ReqlDynFunction> for F where F::Output: ReqlFunction {}
+	impl<F: ReqlFunction<Args>, Args> ReqlTypedFunction<Args, ReqlDynOrdering> for F where F::Output: ReqlOrdering {}
+	impl<F: ReqlFunction<Args>, Args> ReqlTypedFunction<Args, ReqlDynPathSpec> for F where F::Output: ReqlPathSpec {}
+	impl<F: ReqlFunction<Args>, Args> ReqlTypedFunction<Args, ReqlDynError> for F where F::Output: ReqlErrorTy {}
 }
 
 mod terms {
@@ -1155,8 +1172,7 @@ mod terms {
 	    		O: ReqlTerm,
 	    		$head_ty $(, $tail_ty )*,
 	    		const $head_idx: usize $(, const $tail_idx: usize )*
-			> ReqlFunction for (T, PhantomData<dyn Fn( ReqlVar<$head_ty, $head_idx>, $( ReqlVar<$tail_ty, $tail_idx>, )* ) -> O + Send + Sync + Unpin>) {
-				type Args = ($head_ty $(, $tail_ty )* );
+			> ReqlFunction<($head_ty $(, $tail_ty )* )> for (T, PhantomData<dyn Fn( ReqlVar<$head_ty, $head_idx>, $( ReqlVar<$tail_ty, $tail_idx>, )* ) -> O + Send + Sync + Unpin>) {
 				type Output = O;
 			}
 	    };
@@ -1558,7 +1574,7 @@ mod tests {
 	#[test]
 	fn function_term() {
 		let mut buf = Vec::<u8>::new();
-		func!(|a: ReqlVar<ReqlDynNumber, 1>, b: ReqlVar<ReqlDynNumber, 2>| { a.add(b) })
+		expr!(|a: ReqlVar<ReqlDynNumber, 1>, b: ReqlVar<ReqlDynNumber, 2>| { a.add(b) })
 			.serialize(&mut buf)
 			.unwrap();
 		
