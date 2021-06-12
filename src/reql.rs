@@ -960,7 +960,7 @@ mod var_args {
 	pub trait VarArgsTrait<T>: VarArgsSerializable {}
 	
 	#[derive(Copy, Clone, Debug, Default)]
-	pub struct One<T: ReqlTerm>(T);
+	pub struct One<T: ReqlTerm>(pub T);
 	
 	impl<T: ReqlTop     > VarArgsTrait<ReqlDynTop>      for One<T> {}
 	impl<T: ReqlDatum   > VarArgsTrait<ReqlDynDatum>    for One<T> {}
