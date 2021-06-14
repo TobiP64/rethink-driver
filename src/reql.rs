@@ -684,6 +684,10 @@ mod expr {
 	}
 	
 	impl ReqlExpr {
+		pub fn from_seq<T: serde::Serialize>(v: &[T]) -> Self {
+			Self(format!("[2, {}]", serde_json::to_string(&v).unwrap()))
+		}
+		
 		pub fn obj() -> ReqlExprObjBuilder {
 			ReqlExprObjBuilder::default()
 		}
@@ -742,7 +746,7 @@ mod expr {
 	
 	impl Default for ReqlExprSeqBuilder {
 		fn default() -> Self {
-			Self(vec![b'['])
+			Self(b"[2, [".to_vec())
 		}
 	}
 	
@@ -758,7 +762,7 @@ mod expr {
 				self.0.truncate(self.0.len() - 1);
 			}
 			
-			self.0.push(b']');
+			self.0.extend_from_slice(b"]]");
 			ReqlExpr(String::from_utf8(self.0).unwrap())
 		}
 	}
@@ -766,7 +770,7 @@ mod expr {
 	#[macro_export]
 	macro_rules! obj {
 		() => {{ ReqlExpr("{}".to_string()) }};
-		() => [{ ReqlExpr("[]".to_string()) }];
+		() => [{ ReqlExpr("[2,[]]".to_string()) }];
 		( $key0:ident: $val0:expr $(, $key:ident: $val:expr )* ) => {{
 			ReqlExpr({
 				let mut buf = Vec::new();
@@ -783,7 +787,7 @@ mod expr {
 			})
 		}};
 		( $val0:ident $(, $val:ident )* ) => [{
-			ReqlExpr(concat!("[", stringify!($val0), $( ",", stringify!($val), )* "]"))
+			ReqlExpr(concat!("[2, [", stringify!($val0), $( ",", stringify!($val), )* "]]"))
 		}]
 	}
 	
