@@ -985,25 +985,25 @@ mod var_args {
 	}
 	
 	macro_rules! varargs {
-		( $head:ident, ) => {};
-		( $head:ident $(, $tail:ident )*, ) => {
+		() => {};
+		( $head:ident, $( $tail:ident, )* ) => {
 			varargs!( $( $tail, )* );
 		
-			impl< $head: ReqlTop      $(, $tail: ReqlTop      )* > VarArgsTrait<ReqlDynTop>      for ( $head $(, $tail )* ) {}
-			impl< $head: ReqlDatum    $(, $tail: ReqlDatum    )* > VarArgsTrait<ReqlDynDatum>    for ( $head $(, $tail )* ) {}
-			impl< $head: ReqlNull     $(, $tail: ReqlNull     )* > VarArgsTrait<ReqlDynNull>     for ( $head $(, $tail )* ) {}
-			impl< $head: ReqlBool     $(, $tail: ReqlBool     )* > VarArgsTrait<ReqlDynBool>     for ( $head $(, $tail )* ) {}
-			impl< $head: ReqlNumber   $(, $tail: ReqlNumber   )* > VarArgsTrait<ReqlDynNumber>   for ( $head $(, $tail )* ) {}
-			impl< $head: ReqlString   $(, $tail: ReqlString   )* > VarArgsTrait<ReqlDynString>   for ( $head $(, $tail )* ) {}
-			impl< $head: ReqlObject   $(, $tail: ReqlObject   )* > VarArgsTrait<ReqlDynObject>   for ( $head $(, $tail )* ) {}
-			impl< $head: ReqlArray    $(, $tail: ReqlArray    )* > VarArgsTrait<ReqlDynArray>    for ( $head $(, $tail )* ) {}
-			impl< $head: ReqlSequence $(, $tail: ReqlSequence )* > VarArgsTrait<ReqlDynSequence> for ( $head $(, $tail )* ) {}
-			impl< $head: ReqlPathSpec $(, $tail: ReqlPathSpec )* > VarArgsTrait<ReqlDynPathSpec> for ( $head $(, $tail )* ) {}
+			impl< $head: ReqlTop      $(, $tail: ReqlTop      )* > VarArgsTrait<ReqlDynTop>      for ( $head, $( $tail, )* ) {}
+			impl< $head: ReqlDatum    $(, $tail: ReqlDatum    )* > VarArgsTrait<ReqlDynDatum>    for ( $head, $( $tail, )* ) {}
+			impl< $head: ReqlNull     $(, $tail: ReqlNull     )* > VarArgsTrait<ReqlDynNull>     for ( $head, $( $tail, )* ) {}
+			impl< $head: ReqlBool     $(, $tail: ReqlBool     )* > VarArgsTrait<ReqlDynBool>     for ( $head, $( $tail, )* ) {}
+			impl< $head: ReqlNumber   $(, $tail: ReqlNumber   )* > VarArgsTrait<ReqlDynNumber>   for ( $head, $( $tail, )* ) {}
+			impl< $head: ReqlString   $(, $tail: ReqlString   )* > VarArgsTrait<ReqlDynString>   for ( $head, $( $tail, )* ) {}
+			impl< $head: ReqlObject   $(, $tail: ReqlObject   )* > VarArgsTrait<ReqlDynObject>   for ( $head, $( $tail, )* ) {}
+			impl< $head: ReqlArray    $(, $tail: ReqlArray    )* > VarArgsTrait<ReqlDynArray>    for ( $head, $( $tail, )* ) {}
+			impl< $head: ReqlSequence $(, $tail: ReqlSequence )* > VarArgsTrait<ReqlDynSequence> for ( $head, $( $tail, )* ) {}
+			impl< $head: ReqlPathSpec $(, $tail: ReqlPathSpec )* > VarArgsTrait<ReqlDynPathSpec> for ( $head, $( $tail, )* ) {}
 			
-			impl< $head: ReqlTerm $(, $tail: ReqlTerm )* > VarArgsSerializable for ( $head $(, $tail )* ) {
+			impl< $head: ReqlTerm $(, $tail: ReqlTerm )* > VarArgsSerializable for ( $head, $( $tail, )* ) {
 				#[allow(non_snake_case, unused_variables)]
 				fn serialize(&self, dst: &mut impl Write) -> std::io::Result<()> {
-					let ( $head $(, $tail )* ) = self;
+					let ( $head, $( $tail, )* ) = self;
 					$head.serialize(dst)?;
 					
 					$(
