@@ -24,11 +24,10 @@ use {
 	crate::{*, auth::AuthError::*, Error::Auth},
 	std::io::{Read, Write},
 	serde::{Serialize, Deserialize},
-	hmac::{Hmac, Mac},
+	hmac::{Hmac, Mac, NewMac},
 	sha2::Sha256,
 	base64::STANDARD
 };
-use hmac::NewMac;
 
 pub const AUTH_METHOD_SCRAM_SHA_256: &str = "SCRAM-SHA-256";
 pub const MIN_ITERATIONS:            u32 = 4096;
@@ -84,7 +83,7 @@ impl<'a> ServerVersionMessage<'a> {
 	}
 	
 	#[cfg(feature = "async")]
-	async fn recv_async<'b>(reader: &mut (impl futures_lite::AsyncReadExt + Unpin), buf: &'b mut [u8]) -> Result<(ServerVersionMessage<'b>, &'b mut [u8])> {
+	async fn recv_async<'b>(reader: &mut (impl smol::io::AsyncReadExt + Unpin), buf: &'b mut [u8]) -> Result<(ServerVersionMessage<'b>, &'b mut [u8])> {
 		let (old_buf, new_buf) = recv_msg_async(reader, buf).await?;
 		Ok((Self::from_buf(old_buf)?, new_buf))
 	}
@@ -119,7 +118,7 @@ impl<'a> ServerMessage<'a> {
 	}
 	
 	#[cfg(feature = "async")]
-	async fn recv_async<'b>(reader: &mut (impl futures_lite::AsyncReadExt + Unpin), buf: &'b mut [u8]) -> Result<(ServerMessage<'b>, &'b mut [u8])> {
+	async fn recv_async<'b>(reader: &mut (impl smol::io::AsyncReadExt + Unpin), buf: &'b mut [u8]) -> Result<(ServerMessage<'b>, &'b mut [u8])> {
 		let (old_buf, new_buf) = recv_msg_async(reader, buf).await?;
 		Ok((Self::from_buf(old_buf)?, new_buf))
 	}
@@ -158,7 +157,7 @@ pub fn handshake(stream: &mut (impl Read + Write), options: &ConnectionOptions) 
 	let combined_nonce = sasl_get(auth, "r=")
 		.ok_or(Auth(InvalidReply))?
 		.as_bytes();
-	let (salt, mut new_buf) = base64_decode(sasl_get(auth, "s=")
+	let (salt, new_buf) = base64_decode(sasl_get(auth, "s=")
 		.ok_or(Auth(InvalidReply))?, new_buf)
 		.map_err(|_| Auth(InvalidReply))?;
 	let iterations = sasl_get(auth, "i=")
@@ -174,7 +173,7 @@ pub fn handshake(stream: &mut (impl Read + Write), options: &ConnectionOptions) 
 	
 	// client final message
 	
-	let auth_msg = concat_into(&mut new_buf, &[
+	let auth_msg = concat_into(new_buf, &[
 		b"n=",
 		user.as_bytes(),
 		b",r=",
@@ -217,7 +216,7 @@ pub fn handshake(stream: &mut (impl Read + Write), options: &ConnectionOptions) 
 }
 
 #[cfg(feature = "async")]
-pub async fn handshake_async(stream: &mut (impl futures_lite::AsyncReadExt + futures_lite::AsyncWriteExt + Unpin), options: &ConnectionOptions) -> Result<()> {
+pub async fn handshake_async(stream: &mut (impl smol::io::AsyncReadExt + smol::io::AsyncWriteExt + Unpin), options: &ConnectionOptions) -> Result<()> {
 	let start    = std::time::Instant::now();
 	let mut buf  = [0u8; DEFAULT_BUFFER_LEN];
 	let user     = stringprep::saslprep(options.user.as_deref().unwrap_or(DEFAULT_USER)).unwrap();
@@ -250,7 +249,7 @@ pub async fn handshake_async(stream: &mut (impl futures_lite::AsyncReadExt + fut
 	let combined_nonce = sasl_get(auth, "r=")
 		.ok_or(Auth(InvalidReply))?
 		.as_bytes();
-	let (salt, mut new_buf) = base64_decode(sasl_get(auth, "s=")
+	let (salt, new_buf) = base64_decode(sasl_get(auth, "s=")
 		.ok_or(Auth(InvalidReply))?, new_buf)
 		.map_err(|_| Auth(InvalidReply))?;
 	let iterations = sasl_get(auth, "i=")
@@ -266,7 +265,7 @@ pub async fn handshake_async(stream: &mut (impl futures_lite::AsyncReadExt + fut
 	
 	// client final message
 	
-	let auth_msg = concat_into(&mut new_buf, &[
+	let auth_msg = concat_into(new_buf, &[
 		b"n=",
 		user.as_bytes(),
 		b",r=",
@@ -278,7 +277,7 @@ pub async fn handshake_async(stream: &mut (impl futures_lite::AsyncReadExt + fut
 	]);
 	
 	let (client_proof, server_signature) = gen_client_proof(
-		password.as_bytes(), &salt, iterations, auth_msg);
+		password.as_bytes(), salt, iterations, auth_msg);
 	let (base64_client_proof, new_buf) = base64_encode(&client_proof, new_buf);
 	
 	send_msg_async(stream, new_buf, &[
@@ -325,7 +324,7 @@ fn recv_msg<'a>(reader: &mut impl Read, buf: &'a mut [u8]) -> Result<(&'a mut [u
 }
 
 #[cfg(feature = "async")]
-async fn send_msg_async(writer: &mut (impl futures_lite::AsyncWriteExt + Unpin), buf: &mut [u8], src: &[&[u8]]) -> Result<()> {
+async fn send_msg_async(writer: &mut (impl smol::io::AsyncWriteExt + Unpin), buf: &mut [u8], src: &[&[u8]]) -> Result<()> {
 	writer.write_all(concat_into(buf, src)).await?;
 	writer.flush().await?;
 	Ok(())
@@ -333,7 +332,7 @@ async fn send_msg_async(writer: &mut (impl futures_lite::AsyncWriteExt + Unpin),
 
 #[cfg(feature = "async")]
 #[allow(clippy::needless_lifetimes)] // removing the lifetime results in a compiler error
-async fn recv_msg_async<'a>(reader: &mut (impl futures_lite::AsyncReadExt + Unpin), buf: &'a mut [u8]) -> Result<(&'a mut [u8], &'a mut [u8])> {
+async fn recv_msg_async<'a>(reader: &mut (impl smol::io::AsyncReadExt + Unpin), buf: &'a mut [u8]) -> Result<(&'a mut [u8], &'a mut [u8])> {
 	let mut len = 0;
 	Ok(loop {
 		len += reader.read(&mut buf[len..]).await?;

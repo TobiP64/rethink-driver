@@ -263,14 +263,14 @@ impl<T: DeserializeOwned> Response<T> {
 
 pub type Document<T> = std::result::Result<T, String>;
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub enum ReqlError {
 	Compile,
 	Runtime(ReqlRuntimeError),
 	Driver(ReqlDriverError)
 }
 
-#[derive(Debug)]
+#[derive(Debug, Copy, Clone)]
 pub enum ReqlDriverError {
 	BadRequest,
 	Auth
@@ -279,17 +279,33 @@ pub enum ReqlDriverError {
 #[derive(Copy, Clone, Debug, Default, Deserialize)]
 pub struct Binary;
 
+/// Helper trait to run queries
 pub trait Run: ReqlTerm + Sized {
 	/// Run a query on the given connection. Returns a cursor that yields elements of the type `T`.
-	fn run<T: DeserializeOwned>(self, conn: &RDbConnection, options: Option<QueryOptions>) -> Result<Cursor<T>> {
+	fn run<T: DeserializeOwned>(self, conn: &Connection, options: Option<QueryOptions>) -> Result<Cursor<T>> {
 		conn.run(self, options)
 	}
 	
 	/// Run a query on the given connection asynchronously. Returns a cursor that yields elements of the type `T`.
 	#[cfg(feature = "async")]
-	fn run_async<'a, T: DeserializeOwned + Send + Sync + Unpin + 'static>(self, conn: &'a RDbAsyncConnection, options: Option<QueryOptions<'a>>)
+	fn run_async<'a, T: DeserializeOwned + Send + Sync + Unpin + 'static>(self, conn: &'a AsyncConnection, options: Option<QueryOptions<'a>>)
 		-> Pin<Box<dyn Future<Output = Result<AsyncCursor<T>>> + Send + 'a>> where Self: 'a + Send + Sync + Unpin {
 		Box::pin(conn.run(self, options))
+	}
+	
+	/// Run a query on the given connection. Returns an element of the type `T`.
+	fn run_single<T: DeserializeOwned>(self, conn: &Connection, options: Option<QueryOptions>) -> Result<Option<T>> {
+		conn.run(self, options)?.next().transpose()
+	}
+	
+	/// Run a query on the given connection asynchronously. Returns an element of the type `T`.
+	#[cfg(feature = "async")]
+	fn run_single_async<'a, T: DeserializeOwned + Send + Sync + Unpin + 'static>(self, conn: &'a AsyncConnection, options: Option<QueryOptions<'a>>)
+		-> Pin<Box<dyn Future<Output = Result<Option<T>>> + Send + 'a>> where Self: 'a + Send + Sync + Unpin {
+		Box::pin(async move {
+			smol::stream::StreamExt::next(&mut conn.run(
+				self, options).await?).await.transpose()
+		})
 	}
 }
 
@@ -298,6 +314,12 @@ impl<T: ReqlTerm + Sized> Run for T {}
 pub trait ReqlTerm {
 	fn serialize(&self, dst: &mut impl Write) -> std::io::Result<()>;
 }
+
+/*impl<T: serde::Serialize> ReqlTerm for T {
+	fn serialize(&self, dst: &mut impl Write) -> std::io::Result<()> {
+		todo!()
+	}
+}*/
 
 mod result {
 	use super::*;
@@ -732,13 +754,13 @@ mod expr {
 			self
 		}
 		
-		pub fn finish(mut self) -> ReqlExpr {
+		pub fn finish(&mut self) -> ReqlExpr {
 			if self.0.ends_with(&[b',']) {
 				self.0.truncate(self.0.len() - 1);
 			}
 			
 			self.0.push(b'}');
-			ReqlExpr(String::from_utf8(self.0).unwrap())
+			ReqlExpr(String::from_utf8(std::mem::take(&mut self.0)).unwrap())
 		}
 	}
 	
@@ -757,40 +779,34 @@ mod expr {
 			self
 		}
 		
-		pub fn finish(mut self) -> ReqlExpr {
+		pub fn finish(&mut self) -> ReqlExpr {
 			if self.0.ends_with(&[b',']) {
 				self.0.truncate(self.0.len() - 1);
 			}
 			
 			self.0.extend_from_slice(b"]]");
-			ReqlExpr(String::from_utf8(self.0).unwrap())
+			ReqlExpr(String::from_utf8(std::mem::take(&mut self.0)).unwrap())
 		}
 	}
 	
+	/// Helper macro to create `expr`s from objects/sequences
 	#[macro_export]
 	macro_rules! obj {
 		() => {{ ReqlExpr("{}".to_string()) }};
 		() => [{ ReqlExpr("[2,[]]".to_string()) }];
-		( $key0:ident: $val0:expr $(, $key:ident: $val:expr )* ) => {{
-			ReqlExpr({
-				let mut buf = Vec::new();
-				std::io::Write::write_all(&mut buf, concat!("{", "\"", stringify!($key0), "\":").as_bytes()).unwrap();
-				$crate::reql::reql_to_string(&mut buf, $val0);
-				
-				$(
-					std::io::Write::write_all(&mut buf, concat!(",\"", stringify!($key), "\":").as_bytes()).unwrap();
-					$crate::reql::reql_to_string(&mut buf, $val);
-				)*
-				
-				buf.push(b'}');
-				String::from_utf8(buf).unwrap()
-			})
+		( $( $key:ident: $val:expr ),* ) => {{
+			ReqlExprObjBuilder::default()
+				$( .field( stringify!($key), $val ) )*
+				.finish()
 		}};
-		( $val0:ident $(, $val:ident )* ) => [{
-			ReqlExpr(concat!("[2, [", stringify!($val0), $( ",", stringify!($val), )* "]]"))
+		( $( $val:expr ),* ) => [{
+			ReqlExprSeqBuilder::default()
+				$( .element( $val ) )*
+				.finish()
 		}]
 	}
 	
+	/// Helper macro to create `expr`s from closures, control structures and serializable values
 	#[macro_export]
 	macro_rules! expr {
 		(move | $( $ident:ident: $ty:ty ),* | $expr:expr) => {
@@ -962,27 +978,6 @@ mod var_args {
 	}
 	
 	pub trait VarArgsTrait<T>: VarArgsSerializable {}
-	
-	#[derive(Copy, Clone, Debug, Default)]
-	pub struct One<T: ReqlTerm>(pub T);
-	
-	impl<T: ReqlTop     > VarArgsTrait<ReqlDynTop>      for One<T> {}
-	impl<T: ReqlDatum   > VarArgsTrait<ReqlDynDatum>    for One<T> {}
-	impl<T: ReqlNull    > VarArgsTrait<ReqlDynNull>     for One<T> {}
-	impl<T: ReqlBool    > VarArgsTrait<ReqlDynBool>     for One<T> {}
-	impl<T: ReqlNumber  > VarArgsTrait<ReqlDynNumber>   for One<T> {}
-	impl<T: ReqlString  > VarArgsTrait<ReqlDynString>   for One<T> {}
-	impl<T: ReqlObject  > VarArgsTrait<ReqlDynObject>   for One<T> {}
-	impl<T: ReqlArray   > VarArgsTrait<ReqlDynArray>    for One<T> {}
-	impl<T: ReqlSequence> VarArgsTrait<ReqlDynSequence> for One<T> {}
-	impl<T: ReqlPathSpec> VarArgsTrait<ReqlDynPathSpec> for One<T> {}
-	
-	impl<T: ReqlTerm> VarArgsSerializable for One<T> {
-		#[allow(non_snake_case, unused_variables)]
-		fn serialize(&self, dst: &mut impl Write) -> std::io::Result<()> {
-			T::serialize(&self.0, dst)
-		}
-	}
 	
 	macro_rules! varargs {
 		() => {};
@@ -1241,17 +1236,17 @@ mod terms {
 			
 			reql_impl_traits!(impl $out for $struct_name< $( $optarg_type: $optarg_trait, )* >);
 			
-			#[derive(Copy, Clone, Debug, Default)]
-			pub struct $opts_name< $( $optarg_type: $optarg_trait, )* > {
-				$( $optarg_name: $optarg_type, )*
-			}
-			
-			impl< $( $optarg_type: $optarg_trait, )* > $struct_name< $( $optarg_type, )* > {
-				pub fn options< $( $optarg_type: $optarg_trait, )* >(self, options: $opts_name< $( $optarg_type, )* >) -> $struct_name< $( $optarg_type, )* > {
-					let $opts_name { $( $optarg_name: $optarg_type, )* } = options;
-					Self( $( $optarg_name, )* )
-				}
-			}
+			//#[derive(Copy, Clone, Debug, Default)]
+			//pub struct $opts_name< $( $optarg_type: $optarg_trait, )* > {
+			//	$( $optarg_name: $optarg_type, )*
+			//}
+			//
+			//impl< $( $optarg_type: $optarg_trait, )* > $struct_name< $( $optarg_type, )* > {
+			//	pub fn options< $( $optarg_type: $optarg_trait, )* >(self, options: $opts_name< $( $optarg_type, )* >) -> $struct_name< $( $optarg_type, )* > {
+			//		let $opts_name { $( $optarg_name: $optarg_type, )* } = options;
+			//		Self( $( $optarg_name, )* )
+			//	}
+			//}
 			
 			impl< $( $optarg_type: $optarg_trait, )* > ReqlTerm for $struct_name< $( $optarg_type, )* > {
 				fn serialize(&self, dst: &mut impl Write) -> std::io::Result<()> {
@@ -1294,10 +1289,10 @@ mod terms {
 			
 			reql_impl_traits!(impl $out for $struct_name< $arg0_type: $arg0_trait, $( $arg_type: $arg_trait, )* $( $optarg_type: $optarg_trait, )* >);
 			
-			#[derive(Copy, Clone, Debug, Default)]
-			pub struct $opts_name< $( $optarg_type: $optarg_trait, )* > {
-				$( $optarg_name: $optarg_type, )*
-			}
+			//#[derive(Copy, Clone, Debug, Default)]
+			//pub struct $opts_name< $( $optarg_type: $optarg_trait, )* > {
+			//	$( $optarg_name: $optarg_type, )*
+			//}
 			
 			impl< $arg0_type: $arg0_trait, $( $arg_type: $arg_trait, )* $( $optarg_type: $optarg_trait, )* > ReqlTerm for $struct_name< $arg0_type, $( $arg_type, )* $( $optarg_type, )* > {
 				fn serialize(&self, dst: &mut impl Write) -> std::io::Result<()> {
@@ -1422,7 +1417,7 @@ mod terms {
 	term!(ReqlOpTableDropDb      =  61, ReqlTableDropDbInfix,      fn table_drop_db(db: DB; ReqlDatabase, name: S; ReqlString) -> ReqlObject);
 	term!(ReqlOpTableList        =  62,                            fn table_list() -> ReqlArray);
 	term!(ReqlOpTableListDb      =  62, ReqlTableListDbInfix,      fn table_list_db(db: DB; ReqlDatabase) -> ReqlArray);
-	//term!(ReqlOpFunCall          =  64, ReqlFunCallInfix,          fn funcall(f: F; ReqlTypedFunction, data: D; VarArgsTrait<ReqlDynDatum>) -> ReqlDatum);
+	
 	term!(ReqlOpBranch           =  65, ReqlBranchInfix,           fn branch(c: C; ReqlBool, a: A; ReqlTop, b: B; ReqlTop) -> ReqlTop);
 	term!(ReqlOpOr               =  66, ReqlOrInfix,               fn or(v: V; VarArgsTrait<ReqlDynBool>) -> ReqlBool);
 	term!(ReqlOpAnd              =  67, ReqlAndInfix,              fn and(v: V; VarArgsTrait<ReqlDynBool>) -> ReqlBool);
@@ -1453,6 +1448,8 @@ mod terms {
 	term!(ReqlOpSetUnion         =  90, ReqlSetUnionInfix,         fn set_union(a: A; ReqlArray, b: B; ReqlArray) -> ReqlArray);
 	term!(ReqlOpSetDifference    =  91, ReqlSetDifferenceInfix,    fn set_difference(a: A; ReqlArray, b: B; ReqlArray) -> ReqlArray);
 	term!(ReqlOpDefault          =  92, ReqlDefaultInfix,          fn default_(a: A; ReqlTop, b: B; ReqlTop) -> ReqlTop);
+	term!(ReqlOpContainsOne      =  93, ReqlContainsOneInfix,      fn contains_one(s: S; ReqlSequence, v: V; ReqlDatum) -> ReqlBool);
+	term!(ReqlOpContainsOneWith  =  93, ReqlContainsOneWithInfix,  fn contains_one_with(s: S; ReqlSequence, v: V; ReqlTypedFunction<ReqlDynDatum, ReqlDynBool>) -> ReqlBool);
 	term!(ReqlOpContains         =  93, ReqlContainsInfix,         fn contains(s: S; ReqlSequence, v: V; VarArgsTrait<ReqlDynDatum>) -> ReqlBool);
 	term!(ReqlOpContainsWith     =  93, ReqlContainsWithInfix,     fn contains_with(s: S; ReqlSequence, v: V; VarArgsTrait<ReqlDynFunction>) -> ReqlBool);
 	term!(ReqlOpKeys             =  94, ReqlKeysInfix,             fn keys(o: O; ReqlObject) -> ReqlArray);
@@ -1557,6 +1554,102 @@ mod terms {
 	term!(ReqlOpBitNot           = 194, ReqlBitNotInfix,           fn bit_not(v: V; ReqlNumber) -> ReqlNumber);
 	term!(ReqlOpBitSal           = 195, ReqlBitSalInfix,           fn bit_sal(a: A; ReqlNumber, b: B; ReqlNumber) -> ReqlNumber);
 	term!(ReqlOpBitSar           = 196, ReqlBitSarInfix,           fn bit_sar(a: A; ReqlNumber, b: B; ReqlNumber) -> ReqlNumber);
+	
+	pub struct ReqlOpFunCall<F: ReqlFunction<D>, D: VarArgsSerializable>(F, D);
+	
+	impl<F: ReqlFunction<D>, D: VarArgsSerializable> ReqlTerm for ReqlOpFunCall<F, D> {
+		fn serialize(&self, dst: &mut impl Write) -> Result<()> {
+			dst.write_all(b"[64,[")?;
+			self.0.serialize(dst)?;
+			dst.write_all(b",")?;
+			self.1.serialize(dst)?;
+			dst.write_all(b"]]")
+		}
+	}
+	
+	pub trait ReqlFunCallInfix<D: VarArgsSerializable>: ReqlFunction<D> + Sized {
+		fn funcall(self, data: D) -> ReqlOpFunCall<Self, D> {
+			ReqlOpFunCall(self, data)
+		}
+	}
+
+	impl<T: ReqlFunction<D>, D: VarArgsSerializable> ReqlFunCallInfix<D> for T {}
+	
+	pub fn funcall<F: ReqlFunction<D>, D: VarArgsSerializable>(f: F, data: D) -> ReqlOpFunCall<F, D> {
+		ReqlOpFunCall(f, data)
+	}
+	
+	pub struct ReqlOpGetFieldWithType<O: ReqlObject, S: ReqlString, T>(O, S, PhantomData<T>);
+	
+	impl<O: ReqlObject, S: ReqlString, T> ReqlTerm for ReqlOpGetFieldWithType<O, S, T> {
+		fn serialize(&self, dst: &mut impl Write) -> Result<()> {
+			dst.write_all(b"[32,[")?;
+			self.0.serialize(dst)?;
+			dst.write_all(b",")?;
+			self.1.serialize(dst)?;
+			dst.write_all(b"]]")
+		}
+	}
+	
+	pub trait ReqlOpGetFieldWithTypeInfix: ReqlObject + Sized {
+		fn get_field_t<T, S: ReqlString>(self, s: S) -> ReqlOpGetFieldWithType<Self, S, T> {
+			ReqlOpGetFieldWithType(self, s, PhantomData)
+		}
+	}
+	
+	impl<T: ReqlObject> ReqlOpGetFieldWithTypeInfix for T {}
+	
+	pub fn get_field_with_type<O: ReqlObject, S: ReqlString, T>(o: O, s: S) -> ReqlOpGetFieldWithType<O, S, T> {
+		ReqlOpGetFieldWithType(o, s, PhantomData)
+	}
+	
+	impl<O: ReqlObject, S: ReqlString> ReqlTop             for ReqlOpGetFieldWithType<O, S, ReqlDynTop> {}
+	impl<O: ReqlObject, S: ReqlString> ReqlTop             for ReqlOpGetFieldWithType<O, S, ReqlDynDatum> {}
+	impl<O: ReqlObject, S: ReqlString> ReqlDatum           for ReqlOpGetFieldWithType<O, S, ReqlDynDatum> {}
+	impl<O: ReqlObject, S: ReqlString> ReqlTop             for ReqlOpGetFieldWithType<O, S, ReqlDynNull> {}
+	impl<O: ReqlObject, S: ReqlString> ReqlDatum           for ReqlOpGetFieldWithType<O, S, ReqlDynNull> {}
+	impl<O: ReqlObject, S: ReqlString> ReqlNull            for ReqlOpGetFieldWithType<O, S, ReqlDynNull> {}
+	impl<O: ReqlObject, S: ReqlString> ReqlTop             for ReqlOpGetFieldWithType<O, S, ReqlDynBool> {}
+	impl<O: ReqlObject, S: ReqlString> ReqlDatum           for ReqlOpGetFieldWithType<O, S, ReqlDynBool> {}
+	impl<O: ReqlObject, S: ReqlString> ReqlBool            for ReqlOpGetFieldWithType<O, S, ReqlDynBool> {}
+	impl<O: ReqlObject, S: ReqlString> ReqlTop             for ReqlOpGetFieldWithType<O, S, ReqlDynNumber> {}
+	impl<O: ReqlObject, S: ReqlString> ReqlNumber          for ReqlOpGetFieldWithType<O, S, ReqlDynNumber> {}
+	impl<O: ReqlObject, S: ReqlString> ReqlDatum           for ReqlOpGetFieldWithType<O, S, ReqlDynNumber> {}
+	impl<O: ReqlObject, S: ReqlString> ReqlString          for ReqlOpGetFieldWithType<O, S, ReqlDynNumber> {}
+	impl<O: ReqlObject, S: ReqlString> ReqlTop             for ReqlOpGetFieldWithType<O, S, ReqlDynObject> {}
+	impl<O: ReqlObject, S: ReqlString> ReqlDatum           for ReqlOpGetFieldWithType<O, S, ReqlDynObject> {}
+	impl<O: ReqlObject, S: ReqlString> ReqlObject          for ReqlOpGetFieldWithType<O, S, ReqlDynObject> {}
+	impl<O: ReqlObject, S: ReqlString> ReqlTop             for ReqlOpGetFieldWithType<O, S, ReqlDynSingleSelection> {}
+	impl<O: ReqlObject, S: ReqlString> ReqlDatum           for ReqlOpGetFieldWithType<O, S, ReqlDynSingleSelection> {}
+	impl<O: ReqlObject, S: ReqlString> ReqlObject          for ReqlOpGetFieldWithType<O, S, ReqlDynSingleSelection> {}
+	impl<O: ReqlObject, S: ReqlString> ReqlSingleSelection for ReqlOpGetFieldWithType<O, S, ReqlDynSingleSelection> {}
+	impl<O: ReqlObject, S: ReqlString> ReqlTop             for ReqlOpGetFieldWithType<O, S, ReqlDynArray> {}
+	impl<O: ReqlObject, S: ReqlString> ReqlDatum           for ReqlOpGetFieldWithType<O, S, ReqlDynArray> {}
+	impl<O: ReqlObject, S: ReqlString> ReqlSequence        for ReqlOpGetFieldWithType<O, S, ReqlDynArray> {}
+	impl<O: ReqlObject, S: ReqlString> ReqlArray           for ReqlOpGetFieldWithType<O, S, ReqlDynArray> {}
+	impl<O: ReqlObject, S: ReqlString> ReqlTop             for ReqlOpGetFieldWithType<O, S, ReqlDynSequence> {}
+	impl<O: ReqlObject, S: ReqlString> ReqlSequence        for ReqlOpGetFieldWithType<O, S, ReqlDynSequence> {}
+	impl<O: ReqlObject, S: ReqlString> ReqlTop             for ReqlOpGetFieldWithType<O, S, ReqlDynStream> {}
+	impl<O: ReqlObject, S: ReqlString> ReqlSequence        for ReqlOpGetFieldWithType<O, S, ReqlDynStream> {}
+	impl<O: ReqlObject, S: ReqlString> ReqlStream          for ReqlOpGetFieldWithType<O, S, ReqlDynStream> {}
+	impl<O: ReqlObject, S: ReqlString> ReqlTop             for ReqlOpGetFieldWithType<O, S, ReqlDynStreamSelection> {}
+	impl<O: ReqlObject, S: ReqlString> ReqlSequence        for ReqlOpGetFieldWithType<O, S, ReqlDynStreamSelection> {}
+	impl<O: ReqlObject, S: ReqlString> ReqlStream          for ReqlOpGetFieldWithType<O, S, ReqlDynStreamSelection> {}
+	impl<O: ReqlObject, S: ReqlString> ReqlStreamSelection for ReqlOpGetFieldWithType<O, S, ReqlDynStreamSelection> {}
+	impl<O: ReqlObject, S: ReqlString> ReqlTop             for ReqlOpGetFieldWithType<O, S, ReqlDynTable> {}
+	impl<O: ReqlObject, S: ReqlString> ReqlSequence        for ReqlOpGetFieldWithType<O, S, ReqlDynTable> {}
+	impl<O: ReqlObject, S: ReqlString> ReqlStream          for ReqlOpGetFieldWithType<O, S, ReqlDynTable> {}
+	impl<O: ReqlObject, S: ReqlString> ReqlStreamSelection for ReqlOpGetFieldWithType<O, S, ReqlDynTable> {}
+	impl<O: ReqlObject, S: ReqlString> ReqlTable           for ReqlOpGetFieldWithType<O, S, ReqlDynTable> {}
+	impl<O: ReqlObject, S: ReqlString> ReqlTop             for ReqlOpGetFieldWithType<O, S, ReqlDynDatabase> {}
+	impl<O: ReqlObject, S: ReqlString> ReqlDatabase        for ReqlOpGetFieldWithType<O, S, ReqlDynDatabase> {}
+	impl<O: ReqlObject, S: ReqlString> ReqlTop             for ReqlOpGetFieldWithType<O, S, ReqlDynFunction> {}
+	//impl<O: ReqlObject, S: ReqlString> ReqlFunction        for ReqlOpGetFieldWithType<O, S, ReqlDynFunction> {}
+	impl<O: ReqlObject, S: ReqlString> ReqlTop             for ReqlOpGetFieldWithType<O, S, ReqlDynOrdering> {}
+	impl<O: ReqlObject, S: ReqlString> ReqlOrdering        for ReqlOpGetFieldWithType<O, S, ReqlDynOrdering> {}
+	impl<O: ReqlObject, S: ReqlString> ReqlTop             for ReqlOpGetFieldWithType<O, S, ReqlDynPathSpec> {}
+	impl<O: ReqlObject, S: ReqlString> ReqlPathSpec        for ReqlOpGetFieldWithType<O, S, ReqlDynPathSpec> {}
+	impl<O: ReqlObject, S: ReqlString> ReqlErrorTy         for ReqlOpGetFieldWithType<O, S, ReqlDynError> {}
 }
 
 #[cfg(test)]

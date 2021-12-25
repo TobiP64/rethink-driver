@@ -27,145 +27,218 @@ use {
 	crate::{auth, ConnectionOptions, Result, QueryToken, DEFAULT_TIMEOUT},
 };
 
+#[cfg(feature = "async")]
+use std::{pin::Pin, task::{Context, Poll}};
+
 pub const VERSION_1_0: u32 = 0x34c2bdc3;
 
-pub enum Stream {
-	Tcp(TcpStream),
-	#[cfg(feature = "tls")]
-	Tls(rustls::StreamOwned<rustls::ClientSession, TcpStream>)
-}
+trait PrimitiveStream: io::Read + io::Write {}
+
+impl<T: io::Read + io::Write> PrimitiveStream for T {}
+
+pub struct Stream(Box<dyn PrimitiveStream>);
 
 impl Stream {
 	#[cfg(not(feature = "tls"))]
-	pub fn connect(host_name: &str, port: u16, options: &ConnectionOptions) -> Result<Self> {
-		let mut stream = TcpStream::connect_timeout(&resolve(host_name, port)?, options.timeout.unwrap_or(DEFAULT_TIMEOUT))?;
+	pub fn connect(options: &ConnectionOptions) -> Result<Self> {
+		let host_name  = options.hostname.as_deref().unwrap_or(crate::DEFAULT_HOST);
+		let port       = options.port.unwrap_or(crate::DEFAULT_PORT);
+		let mut stream = Box::new(TcpStream::connect_timeout(&resolve(host_name, port)?, options.timeout.unwrap_or(DEFAULT_TIMEOUT))?);
 		auth::handshake(&mut stream, options)?;
-		Ok(Self::Tcp(stream))
+		Ok(Self(stream))
 	}
 	
 	#[cfg(feature = "tls")]
-	pub fn connect(host_name: &str, port: u16, options: &ConnectionOptions) -> Result<Self> {
-		let mut stream = TcpStream::connect_timeout(&resolve(host_name, port)?, options.timeout.unwrap_or(DEFAULT_TIMEOUT))?;
-		Ok(match &options.tls {
-			None      => {
-				auth::handshake(&mut stream, options)?;
-				Self::Tcp(stream)
-			},
+	pub fn connect(options: &ConnectionOptions) -> Result<Self> {
+		let host_name = options.hostname.as_deref().unwrap_or(crate::DEFAULT_HOST);
+		let port      = options.port.unwrap_or(crate::DEFAULT_PORT);
+		
+		let mut stream: Box<dyn PrimitiveStream> = match &options.tls {
+			None => Box::new(TcpStream::connect_timeout(&resolve(host_name, port)?, options.timeout.unwrap_or(DEFAULT_TIMEOUT))?),
 			Some(cfg) => {
-				let mut stream = rustls::StreamOwned::new(rustls::ClientSession::new(
-					cfg, webpki::DNSNameRef::try_from_ascii_str(host_name)
-						.map_err(|e| io::Error::new(io::ErrorKind::Other, e))?), stream);
-				auth::handshake(&mut stream, options)?;
-				Self::Tls(stream)
+				let hostname = webpki::DNSNameRef::try_from_ascii_str(host_name)
+					.map_err(|e| io::Error::new(io::ErrorKind::Other, e))?;
+				let stream = TcpStream::connect_timeout(&resolve(host_name, port)?, options.timeout.unwrap_or(DEFAULT_TIMEOUT))?;
+				Box::new(rustls::StreamOwned::new(rustls::ClientSession::new(cfg, hostname), stream))
 			}
-		})
+		};
+		
+		auth::handshake(&mut stream, options)?;
+		Ok(Self(stream))
 	}
 	
 	pub fn send(&mut self, token: QueryToken, query: &[u8]) -> Result<()> {
-		fn send_inner(stream: &mut impl io::Write, token: QueryToken, query: &[u8]) -> Result<()> {
-			stream.write_all(&buf_from_token_len(token, query.len()))?;
-			stream.write_all(query)?;
-			log::trace!("sent #{}: `{}`", token, std::str::from_utf8(query).unwrap_or("<invalid UTF-8>"));
-			Ok(())
-		}
-		
-		match self {
-			Self::Tcp(stream) => send_inner(stream, token, query),
-			Self::Tls(stream) => send_inner(stream, token, query)
-		}
+		self.0.write_all(&buf_from_token_len(token, query.len()))?;
+		self.0.write_all(query)?;
+		Ok(())
 	}
 	
 	pub fn recv(&mut self) -> Result<(QueryToken, Vec<u8>)> {
-		fn recv_inner(stream: &mut impl io::Read) -> Result<(QueryToken, Vec<u8>)> {
-			let mut buf = [0u8; 12];
-			stream.read_exact(&mut buf)?;
-			let (token, len) = buf_to_token_len(buf);
-			let mut buf = vec![0u8; len];
-			stream.read_exact(&mut buf)?;
-			log::trace!("received #{}: `{}`", token, std::str::from_utf8(&buf).unwrap_or("<invalid UTF-8>"));
-			Ok((token, buf))
-		}
+		let mut buf = [0u8; 12];
+		self.0.read_exact(&mut buf)?;
 		
-		match self {
-			Self::Tcp(stream) => recv_inner(stream),
-			Self::Tls(stream) => recv_inner(stream)
-		}
+		let (token, len) = buf_to_token_len(&buf);
+		let mut buf = vec![0u8; len];
+		self.0.read_exact(&mut buf)?;
+		
+		Ok((token, buf))
 	}
 }
 
 impl std::fmt::Debug for Stream {
 	fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-		f.debug_tuple(match self {
-			Self::Tcp(_) => "Stream::Tcp",
-			#[cfg(feature = "tls")]
-			Self::Tls(_) => "Stream::Tls"
-		}).finish()
+		f.debug_struct("Stream").finish_non_exhaustive()
 	}
 }
 
 #[cfg(feature = "async")]
-pub enum AsyncStream {
-	Tcp(async_io::Async<TcpStream>),
-	#[cfg(feature = "tls")]
-	Tls(async_tls::client::TlsStream<async_io::Async<TcpStream>>)
+trait AsyncPrimitiveStream: smol::io::AsyncRead + smol::io::AsyncWrite + Send {}
+
+#[cfg(feature = "async")]
+impl<T: smol::io::AsyncRead + smol::io::AsyncWrite + Send> AsyncPrimitiveStream for T {}
+
+#[cfg(feature = "async")]
+#[derive(Clone, Debug)]
+enum ReadState {
+	Ready,
+	TokenLen(Vec<u8>, usize),
+	Payload(Vec<u8>, QueryToken, usize)
+}
+
+#[cfg(feature = "async")]
+#[derive(Clone, Debug)]
+enum WriteState {
+	Ready,
+	TokenLen([u8; 12], usize),
+	WritePayload(usize)
+}
+
+#[cfg(feature = "async")]
+pub struct AsyncStream {
+	inner: Pin<Box<dyn AsyncPrimitiveStream>>,
+	read:  ReadState,
+	write: WriteState
 }
 
 #[cfg(feature = "async")]
 impl AsyncStream {
 	#[cfg(not(feature = "tls"))]
-	pub async fn connect(host_name: &str, port: u16, options: &ConnectionOptions) -> Result<Self> {
-		let mut stream = Self::AsyncTcp(async_std::net::TcpStream::connect((host_name, port)).await?);
+	pub async fn connect(options: &ConnectionOptions) -> Result<Self> {
+		let host_name  = options.hostname.as_deref().unwrap_or(crate::DEFAULT_HOST);
+		let port       = options.port.unwrap_or(crate::DEFAULT_PORT);
+		let mut stream = Box::pin(smol::net::TcpStream::connect(resolve(host_name, port)?).await?);
+		
 		auth::handshake_async(&mut stream, options).await?;
-		Ok(Self::Tcp(stream))
+		
+		Ok(Self {
+			inner: stream,
+			read:  ReadState::Ready,
+			write: WriteState::Ready
+		})
 	}
 	
 	#[cfg(feature = "tls")]
-	pub async fn connect(host_name: &str, port: u16, options: &ConnectionOptions) -> Result<Self> {
-		let mut stream = async_io::Async::<TcpStream>::connect(resolve(host_name, port)?).await?;
-		Ok(match &options.tls {
-			None      => {
-				auth::handshake_async(&mut stream, options).await?;
-				Self::Tcp(stream)
-			},
+	pub async fn connect(options: &ConnectionOptions) -> Result<Self> {
+		let host_name = options.hostname.as_deref().unwrap_or(crate::DEFAULT_HOST);
+		let port      = options.port.unwrap_or(crate::DEFAULT_PORT);
+		
+		let mut stream: Pin<Box<dyn AsyncPrimitiveStream>> = match &options.tls {
+			None      => Box::pin(smol::net::TcpStream::connect(resolve(host_name, port)?).await?),
 			Some(cfg) => {
-				let mut stream = async_tls::TlsConnector::from((&**cfg).clone())
-					.connect(host_name, stream).await?;
-				auth::handshake_async(&mut stream, options).await?;
-				Self::Tls(stream)
+				let hostname = webpki::DNSNameRef::try_from_ascii_str(host_name)
+					.map_err(|e| io::Error::new(io::ErrorKind::Other, e))?;
+				let stream = smol::net::TcpStream::connect(resolve(host_name, port)?).await?;
+				Box::pin(async_rustls::TlsConnector::from(cfg.clone())
+					.connect(hostname, stream).await?)
 			}
+		};
+		
+		auth::handshake_async(&mut stream, options).await?;
+		
+		Ok(Self {
+			inner: stream,
+			read:  ReadState::Ready,
+			write: WriteState::Ready
 		})
 	}
 	
 	pub async fn send(&mut self, token: QueryToken, query: &[u8]) -> Result<()> {
-		async fn send_inner(stream: &mut (impl futures_lite::AsyncWrite + std::marker::Unpin), token: QueryToken, query: &[u8]) -> Result<()> {
-			use futures_lite::io::AsyncWriteExt;
-			stream.write_all(&buf_from_token_len(token, query.len())).await?;
-			stream.write_all(query).await?;
-			log::trace!("sent #{}: `{}`", token, std::str::from_utf8(&query).unwrap_or("<invalid UTF-8>"));
-			Ok(())
-		}
-		
-		match self {
-			Self::Tcp(stream) => send_inner(stream, token, query).await,
-			Self::Tls(stream) => send_inner(stream, token, query).await
-		}
+		smol::future::poll_fn(move |cx| Pin::new(&mut*self).poll_send(cx, token, query)).await
 	}
 	
 	pub async fn recv(&mut self) -> Result<(QueryToken, Vec<u8>)> {
-		async fn recv_inner(stream: &mut (impl futures_lite::AsyncRead + std::marker::Unpin)) -> Result<(QueryToken, Vec<u8>)> {
-			use futures_lite::io::AsyncReadExt;
-			let mut buf = [0u8; 12];
-			stream.read_exact(&mut buf).await?;
-			let (token, len) = buf_to_token_len(buf);
-			let mut buf = vec![0u8; len];
-			stream.read_exact(&mut buf).await?;
-			log::trace!("received #{}: `{}`", token, std::str::from_utf8(&buf).unwrap_or("<invalid UTF-8>"));
-			Ok((token, buf))
-		}
+		smol::future::poll_fn(move |cx| Pin::new(&mut*self).poll_recv(cx)).await
+	}
+	
+	pub fn poll_send(self: Pin<&mut Self>, cx: &mut Context<'_>, token: QueryToken, query: &[u8]) -> Poll<Result<()>> {
+		let Self { inner, write, .. } = unsafe { Pin::into_inner_unchecked(self) };
 		
-		match self {
-			Self::Tcp(stream) => recv_inner(stream).await,
-			Self::Tls(stream) => recv_inner(stream).await
+		loop {
+			match write {
+				WriteState::Ready => {
+					let buf = buf_from_token_len(token, query.len());
+					*write = WriteState::TokenLen(buf, 12);
+				}
+				WriteState::TokenLen(buf, rem) if *rem > 0 => {
+					match inner.as_mut().poll_write(cx, &buf[buf.len() - *rem..]) {
+						Poll::Pending => return Poll::Pending,
+						Poll::Ready(Ok(written)) => *rem -= written,
+						Poll::Ready(Err(e)) => return Poll::Ready(Err(crate::Error::Io(e)))
+					}
+				}
+				WriteState::TokenLen(_, _) => *write = WriteState::WritePayload(query.len()),
+				WriteState::WritePayload(rem) if *rem > 0 => {
+					match inner.as_mut().poll_write(cx, &query[query.len() - *rem..]) {
+						Poll::Pending => return Poll::Pending,
+						Poll::Ready(Ok(written)) => *rem -= written,
+						Poll::Ready(Err(e)) => return Poll::Ready(Err(crate::Error::Io(e)))
+					}
+				}
+				WriteState::WritePayload(_) => {
+					*write = WriteState::Ready;
+					return Poll::Ready(Ok(()));
+				}
+			}
+		}
+	}
+	
+	#[allow(clippy::uninit_vec)]
+	pub fn poll_recv(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Result<(QueryToken, Vec<u8>)>> {
+		let Self { inner, read, .. } = unsafe { Pin::into_inner_unchecked(self) };
+		
+		loop {
+			match read {
+				ReadState::Ready => {
+					let mut buf = Vec::with_capacity(12);
+					unsafe { buf.set_len(12) }; // SAFE: capacity is 12
+					*read = ReadState::TokenLen(buf, 12);
+				}
+				ReadState::TokenLen(buf, rem) | ReadState::Payload(buf, _, rem) if *rem > 0 => {
+					let __buf_len__ = buf.len();
+					match inner.as_mut().poll_read(cx, &mut buf[__buf_len__ - *rem..]) {
+						Poll::Pending         => return Poll::Pending,
+						Poll::Ready(Ok(read)) => *rem -= read,
+						Poll::Ready(Err(e))   => return Poll::Ready(Err(crate::Error::Io(e)))
+					}
+				}
+				ReadState::TokenLen(buf, _) => {
+					let (token, len) = buf_to_token_len(buf);
+					
+					if len > 12 {
+						buf.reserve(len - 12);
+					}
+					
+					unsafe { buf.set_len(len) }; // SAFE capacity is at least `len`
+					let buf = std::mem::take(buf);
+					*read = ReadState::Payload(buf, token, len);
+				}
+				ReadState::Payload(buf, token, _) => {
+					let buf = std::mem::take(buf);
+					let token = *token;
+					*read = ReadState::Ready;
+					return Poll::Ready(Ok((token, buf)));
+				}
+			}
 		}
 	}
 }
@@ -173,11 +246,7 @@ impl AsyncStream {
 #[cfg(feature = "async")]
 impl std::fmt::Debug for AsyncStream {
 	fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-		f.debug_tuple(match self {
-			Self::Tcp(_) => "AsyncStream::Tcp",
-			#[cfg(feature = "tls")]
-			Self::Tls(_) => "AsyncStream::Tls"
-		}).finish()
+		f.debug_struct("AsyncStream").finish_non_exhaustive()
 	}
 }
 
@@ -186,7 +255,7 @@ fn resolve(host_name: &str, port: u16) -> io::Result<SocketAddr> {
 		|| io::Error::new(io::ErrorKind::Other, "failed to resolve host name"))
 }
 
-fn buf_to_token_len(buf: [u8; 12]) -> (QueryToken, usize) {
+fn buf_to_token_len(buf: &[u8]) -> (QueryToken, usize) {
 	(
 		u64::from_le_bytes([buf[0], buf[1], buf[2], buf[3], buf[4], buf[5], buf[6], buf[7]]),
 		u32::from_le_bytes([buf[8], buf[9], buf[10], buf[11]]) as _

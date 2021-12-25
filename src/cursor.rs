@@ -22,15 +22,14 @@
 
 use {crate::*, std::collections::VecDeque, serde::de::DeserializeOwned};
 
-#[derive(Clone, Debug)]
 pub struct Cursor<T: DeserializeOwned> {
-	pub conn:   RDbConnection,
+	pub conn: Connection,
 	pub token:  QueryToken,
 	pub buffer: VecDeque<DocResult<T>>
 }
 
 impl<T: DeserializeOwned> Cursor<T> {
-	pub(crate) fn from_response(conn: &RDbConnection, token: QueryToken, response: Response<T>) -> Self {
+	pub(crate) fn from_response(conn: &Connection, token: QueryToken, response: Response<T>) -> Self {
 		Self {
 			conn: conn.clone(),
 			token: match response.r#type {
@@ -84,48 +83,70 @@ impl<T: DeserializeOwned> Drop for Cursor<T> {
 }
 
 #[cfg(feature = "async")]
-#[derive(Clone, Debug)]
-pub struct AsyncCursor<T: DeserializeOwned> {
-	pub conn: RDbAsyncConnection,
+pub struct AsyncCursor<T: DeserializeOwned + Send + Sync> {
+	pub conn: AsyncConnection,
 	pub token:  QueryToken,
-	pub buffer: VecDeque<DocResult<T>>
+	pub buffer: VecDeque<DocResult<T>>,
+	pub state:  Option<smol::future::Boxed<Option<Result<T>>>>
 }
 
 #[cfg(feature = "async")]
-impl<T: DeserializeOwned> AsyncCursor<T> {
-	pub(crate) fn from_response(conn: &RDbAsyncConnection, token: QueryToken, response: Response<T>) -> Self {
+impl<T: 'static + DeserializeOwned + Send + Sync> AsyncCursor<T> {
+	pub(crate) fn from_response(conn: &AsyncConnection, token: QueryToken, response: Response<T>) -> Self {
 		Self {
 			conn:  conn.clone(),
 			token: match response.r#type {
 				ResponseType::SuccessPartial => token,
 				_ => !0
 			},
-			buffer: VecDeque::from(response.result)
+			buffer: VecDeque::from(response.result),
+			state:  None
 		}
 	}
+}
+
+#[cfg(feature = "async")]
+unsafe impl<T: 'static + DeserializeOwned + Send + Sync> Send for AsyncCursor<T> {}
+#[cfg(feature = "async")]
+unsafe impl<T: 'static + DeserializeOwned + Send + Sync> Sync for AsyncCursor<T> {}
+
+#[cfg(feature = "async")]
+impl<T: 'static + DeserializeOwned + Send + Sync> smol::stream::Stream for AsyncCursor<T> {
+	type Item = Result<T>;
 	
-	pub async fn next(&mut self) -> Option<Result<T>> {
-		loop {
-			if let Some(doc) = self.buffer.pop_front() {
-				return Some(doc.into_result())
-			} else if self.token == !0 {
-				return None;
+	fn poll_next(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Option<Self::Item>> {
+		let self_ = unsafe { Pin::into_inner_unchecked(self) };
+		let self_ = unsafe { &mut*(self_ as *mut Self) };
+		
+		let r = self_.state.get_or_insert_with(|| Box::pin(async {
+			loop {
+				if let Some(doc) = self_.buffer.pop_front() {
+					return Some(doc.into_result())
+				} else if self_.token == !0 {
+					return None;
+				}
+				
+				let response = match self_.conn.send_recv::<_, T>(self_.token, Query::<()> {
+					r#type:  QueryType::Continue,
+					term:    None,
+					options: None
+				}).await {
+					Err(e) => return Some(Err(e)),
+					Ok(v) => v
+				};
+				
+				self_.buffer.extend(response.result);
+				
+				if response.r#type != ResponseType::SuccessPartial {
+					self_.token = !0;
+				}
 			}
-			
-			let response = match self.conn.send_recv::<_, T>(self.token, Query::<()> {
-				r#type:  QueryType::Continue,
-				term:    None,
-				options: None
-			}).await {
-				Err(e) => return Some(Err(e)),
-				Ok(v) => v
-			};
-			
-			self.buffer.extend(response.result);
-			
-			if response.r#type != ResponseType::SuccessPartial {
-				self.token = !0;
-			}
+		})).poll(cx);
+		
+		if r.is_ready() {
+			self_.state.take();
 		}
+		
+		r
 	}
 }
