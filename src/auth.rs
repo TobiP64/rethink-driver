@@ -323,7 +323,7 @@ fn recv_msg<'a>(reader: &mut impl Read, buf: &'a mut [u8]) -> Result<(&'a mut [u
 		};
 		
 		if  buf[off - 1] == 0 {
-			return Ok(buf.split_at_mut(off))
+			return Ok(buf.split_at_mut(off - 1))
 		}
 	}
 }
@@ -347,7 +347,7 @@ async fn recv_msg_async<'a>(reader: &mut (impl smol::io::AsyncReadExt + Unpin), 
 		};
 		
 		if  buf[off - 1] == 0 {
-			return Ok(buf.split_at_mut(off))
+			return Ok(buf.split_at_mut(off - 1))
 		}
 	}
 }
