@@ -22,7 +22,7 @@
 
 use {
 	crate::{*, auth::AuthError::*, Error::Auth},
-	std::io::{Read, Write},
+	std::io::{self, Read, Write},
 	serde::{Serialize, Deserialize},
 	hmac::{Hmac, Mac, NewMac},
 	sha2::Sha256,
@@ -323,7 +323,7 @@ fn recv_msg<'a>(reader: &mut impl Read, buf: &'a mut [u8]) -> Result<(&'a mut [u
 		};
 		
 		if  buf[off - 1] == 0 {
-			return Ok(buf[..off - 1])
+			return Ok(buf.split_at_mut(off))
 		}
 	}
 }
@@ -347,7 +347,7 @@ async fn recv_msg_async<'a>(reader: &mut (impl smol::io::AsyncReadExt + Unpin), 
 		};
 		
 		if  buf[off - 1] == 0 {
-			return Ok(buf[..off - 1])
+			return Ok(buf.split_at_mut(off))
 		}
 	}
 }
