@@ -314,13 +314,18 @@ fn send_msg(writer: &mut impl Write, buf: &mut [u8], src: &[&[u8]]) -> Result<()
 }
 
 fn recv_msg<'a>(reader: &mut impl Read, buf: &'a mut [u8]) -> Result<(&'a mut [u8], &'a mut [u8])> {
-	let mut len = 0;
-	Ok(loop {
-		len += reader.read(&mut buf[len..])?;
-		if let Some((idx, _)) = buf[..len].iter().enumerate().find(|(_, v)| **v == 0) {
-			break buf.split_at_mut(idx);
+	let mut off = 0;
+	
+	loop {
+		off += match reader.read(&mut buf[off..])? {
+			0 => return Err(Error::Io(io::Error::from(io::ErrorKind::UnexpectedEof))),
+			v => v
+		};
+		
+		if  buf[off - 1] == 0 {
+			return Ok(buf[..off - 1])
 		}
-	})
+	}
 }
 
 #[cfg(feature = "async")]
@@ -333,13 +338,18 @@ async fn send_msg_async(writer: &mut (impl smol::io::AsyncWriteExt + Unpin), buf
 #[cfg(feature = "async")]
 #[allow(clippy::needless_lifetimes)] // removing the lifetime results in a compiler error
 async fn recv_msg_async<'a>(reader: &mut (impl smol::io::AsyncReadExt + Unpin), buf: &'a mut [u8]) -> Result<(&'a mut [u8], &'a mut [u8])> {
-	let mut len = 0;
-	Ok(loop {
-		len += reader.read(&mut buf[len..]).await?;
-		if let Some((idx, _)) = buf[..len].iter().enumerate().find(|(_, v)| **v == 0) {
-			break buf.split_at_mut(idx);
+	let mut off = 0;
+	
+	loop {
+		off += match reader.read(&mut buf[off..]).await? {
+			0 => return Err(Error::Io(io::Error::from(io::ErrorKind::UnexpectedEof))),
+			v => v
+		};
+		
+		if  buf[off - 1] == 0 {
+			return Ok(buf[..off - 1])
 		}
-	})
+	}
 }
 
 fn base64_decode<'a, T: ?Sized + AsRef<[u8]>>(input: &T, buf: &'a mut [u8]) -> std::result::Result<(&'a mut [u8], &'a mut [u8]), base64::DecodeError> {
