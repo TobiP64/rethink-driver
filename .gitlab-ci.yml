@@ -1,8 +1,13 @@
 include: https://gitlab.com/TobiP64/rust-gitlab-ci/-/raw/master/rust.gitlab-ci.yml
 
-build:
-    parallel:
+.rust-default:
+     parallel:
         matrix:
             -   CHANNEL: [ nightly ]
                 PROFILE: [ debug, release ]
                 TARGET:  [ x86_64-unknown-linux-gnu ]
+
+build:
+    parallel:
+        matrix:
+            -   CHANNEL: [ nightly ]
