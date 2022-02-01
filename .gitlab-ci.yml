@@ -4,10 +4,10 @@ include: https://gitlab.com/TobiP64/rust-gitlab-ci/-/raw/master/rust.gitlab-ci.y
      parallel:
         matrix:
             -   CHANNEL: [ nightly ]
-                PROFILE: [ debug, release ]
-                TARGET:  [ x86_64-unknown-linux-gnu ]
-
+                
 build:
     parallel:
         matrix:
             -   CHANNEL: [ nightly ]
+                PROFILE: [ debug, release ]
+                TARGET:  [ x86_64-unknown-linux-gnu ]
