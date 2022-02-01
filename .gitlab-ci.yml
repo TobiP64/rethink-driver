@@ -11,3 +11,7 @@ build:
             -   CHANNEL: [ nightly ]
                 PROFILE: [ debug, release ]
                 TARGET:  [ x86_64-unknown-linux-gnu ]
+
+build:docs:
+    script:
+        - cargo +nightly doc --color=always --verbose --no-deps $CARGO_OPTS
