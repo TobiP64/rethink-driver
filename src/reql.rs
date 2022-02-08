@@ -218,6 +218,7 @@ impl_types!(impl Number for f64);
 impl_types!(impl String for str);
 impl_types!(impl ( 'a ) String for &'a str);
 impl_types!(impl String for std::string::String);
+impl_types!(impl ( 'a ) String for &'a std::string::String);
 impl_types!(impl ( T: Term<Top> ) Array for [T]);
 impl_types!(impl ( T: Term<Top> ) Array for std::vec::Vec<T>);
 impl_types!(impl ( T: Term<Top> ) Object for std::collections::HashMap<std::string::String, T>);
@@ -229,6 +230,11 @@ impl_types!(impl ( T0: Term<Top>, T1: Term<Top>, T2: Term<Top>, T3: Term<Top>, T
 impl_types!(impl ( T0: Term<Top>, T1: Term<Top>, T2: Term<Top>, T3: Term<Top>, T4: Term<Top>, T5: Term<Top> ) Array for (T0, T1, T2, T3, T4, T5));
 impl_types!(impl ( T0: Term<Top>, T1: Term<Top>, T2: Term<Top>, T3: Term<Top>, T4: Term<Top>, T5: Term<Top>, T6: Term<Top> ) Array for (T0, T1, T2, T3, T4, T5, T6));
 impl_types!(impl ( T0: Term<Top>, T1: Term<Top>, T2: Term<Top>, T3: Term<Top>, T4: Term<Top>, T5: Term<Top>, T6: Term<Top>, T7: Term<Top> ) Array for (T0, T1, T2, T3, T4, T5, T6, T7));
+
+impl<T: Term<Datum>> Term<PathSpec> for T {}
+//impl<T: Term<String>> Term<PathSpec> for T {}
+//impl<T: Term<Object>> Term<PathSpec> for T {}
+//impl<T: Term<Array>>  Term<PathSpec> for T {}
 
 #[derive(Copy, Clone, Debug, Default, Eq, PartialEq)]
 pub struct Ignored;
@@ -255,7 +261,6 @@ impl Term<Table>                for Ignored {}
 impl Term<Database>             for Ignored {}
 impl<A, O> Term<Function<A, O>> for Ignored {}
 impl Term<Ordering>             for Ignored {}
-impl Term<PathSpec>             for Ignored {}
 impl Term<Error>                for Ignored {}
 
 // TERM
@@ -518,7 +523,7 @@ macro_rules! term {
 	) -> $output:ident ) => {
 		#[derive(Clone, Debug, Default, Serialize)]
 		pub struct $opts< $( $opt_name: Term<$opt_type> = Ignored, )* > {
-			$( $opt_name: Option<$opt_name>, )*
+			$( pub $opt_name: Option<$opt_name>, )*
 		}
 		
 		pub fn $name<
@@ -660,7 +665,8 @@ term!(71 => fn limit(s: Sequence, v: Number) -> Sequence);
 term!(72 => fn zip(s: Sequence) -> Sequence);
 term!(73 => fn asc(s: String) -> Ordering);
 term!(74 => fn desc(s: String) -> Ordering);
-term!(75 => fn index_create(t: Table, s: String, f: Function<Datum, Datum>, @struct IndexCreateOptions { multi: Bool }) -> Object);
+term!(75 => fn index_create(t: Table, s: String, @struct IndexCreateOptions { multi: Bool, geo: Bool }) -> Object);
+term!(75 => fn index_create_fn(t: Table, s: String, f: Function<Datum, Datum>, @struct IndexCreateFnOptions { multi: Bool, geo: Bool }) -> Object);
 term!(76 => fn index_drop(t: Table, s: String) -> Object);
 term!(77 => fn index_list(t: Table) -> Array);
 term!(78 => fn get_all(t: Table, d: VarArg<Datum>) -> Array);
