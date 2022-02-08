@@ -24,7 +24,7 @@
 
 use {
 	std::{io, net::{TcpStream, SocketAddr, ToSocketAddrs}},
-	crate::{auth, ConnectionOptions, Result, QueryToken, DEFAULT_TIMEOUT},
+	crate::{auth, ConnectionOptions, Result, QueryToken},
 };
 
 #[cfg(feature = "async")]
@@ -41,24 +41,26 @@ pub struct Stream(Box<dyn PrimitiveStream>);
 impl Stream {
 	#[cfg(not(feature = "tls"))]
 	pub fn connect(options: &ConnectionOptions) -> Result<Self> {
-		let host_name  = options.hostname.as_deref().unwrap_or(crate::DEFAULT_HOST);
-		let port       = options.port.unwrap_or(crate::DEFAULT_PORT);
-		let mut stream = Box::new(TcpStream::connect_timeout(&resolve(host_name, port)?, options.timeout.unwrap_or(DEFAULT_TIMEOUT))?);
+		let mut stream = TcpStream::connect_timeout(
+			&resolve(options.hostname.as_ref(), options.port)?, options.timeout)?;
+		stream.set_read_timeout(Some(options.timeout))?;
+		stream.set_write_timeout(Some(options.timeout))?;
 		auth::handshake(&mut stream, options)?;
 		Ok(Self(stream))
 	}
 	
 	#[cfg(feature = "tls")]
 	pub fn connect(options: &ConnectionOptions) -> Result<Self> {
-		let host_name = options.hostname.as_deref().unwrap_or(crate::DEFAULT_HOST);
-		let port      = options.port.unwrap_or(crate::DEFAULT_PORT);
+		let stream = TcpStream::connect_timeout(
+			&resolve(options.hostname.as_ref(), options.port)?, options.timeout)?;
+		stream.set_read_timeout(Some(options.timeout))?;
+		stream.set_write_timeout(Some(options.timeout))?;
 		
 		let mut stream: Box<dyn PrimitiveStream> = match &options.tls {
-			None => Box::new(TcpStream::connect_timeout(&resolve(host_name, port)?, options.timeout.unwrap_or(DEFAULT_TIMEOUT))?),
+			None => Box::new(stream),
 			Some(cfg) => {
-				let hostname = webpki::DNSNameRef::try_from_ascii_str(host_name)
+				let hostname = webpki::DNSNameRef::try_from_ascii_str(options.hostname.as_ref())
 					.map_err(|e| io::Error::new(io::ErrorKind::Other, e))?;
-				let stream = TcpStream::connect_timeout(&resolve(host_name, port)?, options.timeout.unwrap_or(DEFAULT_TIMEOUT))?;
 				Box::new(rustls::StreamOwned::new(rustls::ClientSession::new(cfg, hostname), stream))
 			}
 		};
@@ -124,10 +126,8 @@ pub struct AsyncStream {
 impl AsyncStream {
 	#[cfg(not(feature = "tls"))]
 	pub async fn connect(options: &ConnectionOptions) -> Result<Self> {
-		let host_name  = options.hostname.as_deref().unwrap_or(crate::DEFAULT_HOST);
-		let port       = options.port.unwrap_or(crate::DEFAULT_PORT);
-		let mut stream = Box::pin(smol::net::TcpStream::connect(resolve(host_name, port)?).await?);
-		
+		let mut stream = smol::net::TcpStream::connect(
+			resolve(options.hostname.as_ref(), options.port)?).await?;
 		auth::handshake_async(&mut stream, options).await?;
 		
 		Ok(Self {
@@ -139,15 +139,14 @@ impl AsyncStream {
 	
 	#[cfg(feature = "tls")]
 	pub async fn connect(options: &ConnectionOptions) -> Result<Self> {
-		let host_name = options.hostname.as_deref().unwrap_or(crate::DEFAULT_HOST);
-		let port      = options.port.unwrap_or(crate::DEFAULT_PORT);
+		let stream = smol::net::TcpStream::connect(
+			resolve(options.hostname.as_ref(), options.port)?).await?;
 		
 		let mut stream: Pin<Box<dyn AsyncPrimitiveStream>> = match &options.tls {
-			None      => Box::pin(smol::net::TcpStream::connect(resolve(host_name, port)?).await?),
+			None      => Box::pin(stream),
 			Some(cfg) => {
-				let hostname = webpki::DNSNameRef::try_from_ascii_str(host_name)
+				let hostname = webpki::DNSNameRef::try_from_ascii_str(options.hostname.as_ref())
 					.map_err(|e| io::Error::new(io::ErrorKind::Other, e))?;
-				let stream = smol::net::TcpStream::connect(resolve(host_name, port)?).await?;
 				Box::pin(async_rustls::TlsConnector::from(cfg.clone())
 					.connect(hostname, stream).await?)
 			}

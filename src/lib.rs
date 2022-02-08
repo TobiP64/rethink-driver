@@ -25,25 +25,18 @@
 #![warn(clippy::all)]
 
 use {
-	std::{time::Duration, sync::{Arc, Mutex, RwLock, atomic::{AtomicU64, Ordering}}},
-	serde::de::DeserializeOwned
+	std::{time::Duration, borrow::Cow, sync::{Arc, Mutex, RwLock, atomic::{AtomicU64, Ordering}}},
+	serde::{Serialize, de::DeserializeOwned}
 };
 
-#[cfg(feature = "async")]
-use {
-	std::{
-		collections::LinkedList,
-		task::{Waker, Poll, Context},
-		pin::Pin
-	},
-	smol::future::FutureExt
-};
+pub use self::{query::*, cursor::*, auth::AuthError};
 
-pub use self::{wire::*, reql::*, cursor::*, auth::AuthError};
+#[cfg(feature = "tls")]
 pub use rustls::ClientConfig as TlsConfig;
 
 pub mod wire;
 pub mod reql;
+pub mod query;
 pub mod cursor;
 pub mod auth;
 #[cfg(feature = "async")]
@@ -58,28 +51,31 @@ pub const DEFAULT_DB:      &str     = "test";
 pub const DEFAULT_USER:    &str     = "admin";
 pub const DEFAULT_PWD:     &str     = "";
 pub const DEFAULT_TIMEOUT: Duration = Duration::from_millis(20);
-const DEFAULT_BUF_LEN:     usize    = 1024;
 
-#[derive(Clone, Default)]
+#[derive(Clone)]
 pub struct ConnectionOptions {
 	/// the host to connect to (default `localhost`)
-	pub hostname: Option<String>,
+	pub hostname: Cow<'static, str>,
 	/// the port to connect on (default `28015`)
-	pub port:     Option<u16>,
+	pub port:     u16,
 	/// the default database (default `test`)
-	pub db:       Option<String>,
+	pub db:       Cow<'static, str>,
 	/// the user account to connect as (default `"admin"`)
-	pub user:     Option<String>,
+	pub user:     Cow<'static, str>,
 	/// the password for the user account to connect as (default `""`)
-	pub password: Option<String>,
+	pub password: Cow<'static, str>,
 	/// timeout period for the connection to be opened (default `20`)
-	pub timeout:  Option<Duration>,
+	pub timeout:  Duration,
 	/// a hash of options to support TLS/SSL connections (default `None`)
 	#[cfg(feature = "tls")]
 	pub tls:      Option<Arc<TlsConfig>>
 }
 
 impl ConnectionOptions {
+	pub fn new() -> Self {
+		Self::default()
+	}
+	
 	pub fn connect(self) -> Result<Connection> {
 		Connection::connect(self)
 	}
@@ -90,11 +86,25 @@ impl ConnectionOptions {
 	}
 }
 
+impl Default for ConnectionOptions {
+	fn default() -> Self {
+		Self {
+			hostname: Cow::Borrowed(DEFAULT_HOST),
+			port:     DEFAULT_PORT,
+			db:       Cow::Borrowed(DEFAULT_DB),
+			user:     Cow::Borrowed(DEFAULT_USER),
+			password: Cow::Borrowed(DEFAULT_PWD),
+			timeout:  DEFAULT_TIMEOUT,
+			tls:      None
+		}
+	}
+}
+
 pub struct ConnectionInner {
 	pub options: ConnectionOptions,
 	db:          RwLock<String>,
 	query_token: AtomicU64,
-	stream:      Mutex<Stream>
+	stream:      Mutex<wire::Stream>
 }
 
 #[derive(Clone)]
@@ -103,9 +113,9 @@ pub struct Connection(Arc<ConnectionInner>);
 impl Connection {
 	pub fn connect(options: ConnectionOptions) -> Result<Self> {
 		Ok(Self(Arc::new(ConnectionInner {
-			db:          RwLock::new(options.db.clone().unwrap_or_else(|| DEFAULT_DB.to_string())),
+			db:          RwLock::new(options.db.clone().into_owned()),
 			query_token: AtomicU64::new(0),
-			stream:      Mutex::new(Stream::connect(&options)?),
+			stream:      Mutex::new(wire::Stream::connect(&options)?),
 			options
 		})))
 	}
@@ -114,25 +124,32 @@ impl Connection {
 		self.0.query_token.fetch_add(1, Ordering::SeqCst)
 	}
 	
-	fn send_recv<Q: ReqlTerm, T: DeserializeOwned>(&self, token: QueryToken, query: Query<Q>) -> Result<Response<T>> {
-		let start = std::time::Instant::now();
-		let mut buf = Vec::with_capacity(DEFAULT_BUF_LEN);
-		query.serialize(&mut buf)?;
+	fn send_recv<Q: Serialize, T: DeserializeOwned>(&self, token: QueryToken, query: Query<Q>) -> Result<Response<T>> {
+		let start   = std::time::Instant::now();
+		let noreply = query.options.as_ref().and_then(|o| o.noreply) == Some(true);
+		let buf     = serde_json::to_vec(&query).map_err(|e| Error::Serialize(e.to_string()))?;
 		let mut stream = self.0.stream.lock().unwrap();
 		stream.send(token, &buf)?;
 		
-		if query.options.as_ref().and_then(|o| o.noreply) == Some(true) {
-			log::trace!("completed query #{} ({}ms, noreply)", token, start.elapsed().as_millis());
+		if noreply {
+			log::trace!("completed query #{} ({}ms, noreply) OK", token, start.elapsed().as_millis());
 			return Ok(Response::new(ResponseType::SuccessSequence))
 		}
 		
 		let (recv_token, buf) = stream.recv()?;
 		if recv_token != token {
+			log::trace!("completed query #{} ({}ms, noreply) ERROR", token, start.elapsed().as_millis());
 			return Err(Error::Io(std::io::Error::new(std::io::ErrorKind::Other, "tokens did not match")));
 		}
 		
 		let r = Response::from_buf(&buf);
-		log::trace!("completed query #{} ({}ms)", token, start.elapsed().as_millis());
+		
+		log::trace!(
+			"completed query #{} ({}ms) {}",
+			token,
+			start.elapsed().as_millis(),
+			if r.is_ok() { "OK" } else { "ERROR" }
+		);
 		r
 	}
 	
@@ -149,7 +166,7 @@ impl Connection {
 			self.noreply_wait()?;
 		}
 		
-		*self.0.stream.lock().unwrap() = Stream::connect(&self.0.options)?;
+		*self.0.stream.lock().unwrap() = wire::Stream::connect(&self.0.options)?;
 		
 		Ok(())
 	}
@@ -158,7 +175,7 @@ impl Connection {
 		*self.0.db.write().unwrap() = db;
 	}
 	
-	pub fn run<Q: reql::ReqlTerm, T: DeserializeOwned>(&self, term: Q, options: Option<QueryOptions>) -> Result<Cursor<T>> {
+	pub fn query<Q: Serialize, T: DeserializeOwned>(&self, term: Q, options: Option<QueryOptions>) -> Result<Cursor<T>> {
 		let token = self.new_token();
 		self.send_recv::<_, T>(token, Query {
 			r#type: QueryType::Start,
@@ -209,9 +226,9 @@ pub struct AsyncConnection(Arc<AsyncConnectionInner>);
 impl AsyncConnection {
 	pub async fn connect(options: ConnectionOptions) -> Result<Self> {
 		Ok(Self(Arc::new(AsyncConnectionInner {
-			db:          RwLock::new(options.db.clone().unwrap_or_else(|| DEFAULT_DB.to_string())),
+			db:          RwLock::new(options.db.clone().into_owned()),
 			query_token: AtomicU64::new(0),
-			scheduler:   scheduler::Scheduler::new(AsyncStream::connect(&options).await?),
+			scheduler:   scheduler::Scheduler::new(wire::AsyncStream::connect(&options).await?),
 			options
 		})))
 	}
@@ -220,11 +237,10 @@ impl AsyncConnection {
 		self.0.query_token.fetch_add(1, Ordering::SeqCst)
 	}
 	
-	async fn send_recv<Q: ReqlTerm, T: DeserializeOwned>(&self, token: QueryToken, query: Query<'_, Q>) -> Result<Response<T>> {
+	async fn send_recv<Q: Serialize, T: DeserializeOwned>(&self, token: QueryToken, query: Query<'_, Q>) -> Result<Response<T>> {
 		let start   = std::time::Instant::now();
 		let noreply = query.options.as_ref().and_then(|o| o.noreply) == Some(true);
-		let mut buf = Vec::with_capacity(DEFAULT_BUF_LEN);
-		query.serialize(&mut buf)?;
+		let buf     = serde_json::to_vec(&query).map_err(|e| Error::Serialize(e.to_string()))?;
 		
 		let result = match self.0.scheduler.dispatch(token, buf, !noreply).await {
 			Ok(None)      => Ok(Response::new(ResponseType::SuccessAtom)),
@@ -256,7 +272,7 @@ impl AsyncConnection {
 			self.noreply_wait().await?;
 		}
 		
-		self.0.scheduler.set_stream(AsyncStream::connect(&self.0.options).await?).await;
+		self.0.scheduler.set_stream(wire::AsyncStream::connect(&self.0.options).await?).await;
 		
 		Ok(())
 	}
@@ -265,7 +281,7 @@ impl AsyncConnection {
 		*self.0.db.write().unwrap() = db;
 	}
 	
-	pub async fn run<Q: ReqlTerm, T: 'static + DeserializeOwned + Send + Sync>(&self, term: Q, options: Option<QueryOptions<'_>>) -> Result<AsyncCursor<T>> {
+	pub async fn query<Q: Serialize, T: 'static + DeserializeOwned + Send + Sync>(&self, term: Q, options: Option<QueryOptions<'_>>) -> Result<AsyncCursor<T>> {
 		let token = self.new_token();
 		self.send_recv::<_, T>(token, Query {
 			r#type: QueryType::Start,
@@ -312,6 +328,7 @@ pub enum Error {
 	Auth(AuthError),
 	Reql(ReqlError, String),
 	InvalidReply(String),
+	Serialize(String),
 	Deserialize(String)
 }
 
@@ -352,9 +369,9 @@ impl From<(ReqlError, String)> for Error {
 }
 
 #[derive(Copy, Clone, Eq, PartialEq, Ord, PartialOrd)]
-pub struct RDbId(pub u128);
+pub struct Id(pub u128);
 
-impl std::str::FromStr for RDbId {
+impl std::str::FromStr for Id {
 	type Err = <u128 as std::str::FromStr>::Err;
 	
 	fn from_str(s: &str) -> std::result::Result<Self, Self::Err> {
@@ -370,7 +387,7 @@ impl std::str::FromStr for RDbId {
 	}
 }
 
-impl std::fmt::Debug for RDbId {
+impl std::fmt::Debug for Id {
 	fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
 		write!(f, "{:08x}-{:04x}-{:04x}-{:04x}-{:012x}",
 			   (self.0 & 0xFFFF_FFFF_0000_0000_0000_0000_0000_0000) >> 96,
@@ -381,13 +398,13 @@ impl std::fmt::Debug for RDbId {
 	}
 }
 
-impl std::fmt::Display for RDbId {
+impl std::fmt::Display for Id {
 	fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
 		std::fmt::Debug::fmt(self, f)
 	}
 }
 
-impl<'de> serde::Deserialize<'de> for RDbId {
+impl<'de> serde::Deserialize<'de> for Id {
 	fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> std::result::Result<Self, D::Error> {
 		use serde::de::Error;
 		
@@ -399,35 +416,8 @@ impl<'de> serde::Deserialize<'de> for RDbId {
 	}
 }
 
-impl serde::Serialize for RDbId {
+impl serde::Serialize for Id {
 	fn serialize<S: serde::Serializer>(&self, serializer: S) -> std::result::Result<S::Ok, S::Error> {
 		serializer.serialize_str(&self.to_string())
-	}
-}
-
-/// A wrapper that implements `Debug` for a type that doesn't.
-#[derive(Copy, Clone, Ord, PartialOrd, Eq, PartialEq, Default)]
-pub struct DebugImpl<T>(pub T);
-
-impl<T> std::fmt::Debug for DebugImpl<T> {
-	fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-		f.debug_struct(std::any::type_name::<T>())
-			.finish()
-	}
-}
-
-impl<T> std::ops::Deref for DebugImpl<T> {
-	type Target = T;
-	
-	#[inline]
-	fn deref(&self) -> &Self::Target {
-		&self.0
-	}
-}
-
-impl<T> std::ops::DerefMut for DebugImpl<T> {
-	#[inline]
-	fn deref_mut(&mut self) -> &mut Self::Target {
-		&mut self.0
 	}
 }

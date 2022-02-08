@@ -20,7 +20,15 @@
 // OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 // SOFTWARE.
 
-use {super::*, std::cell::UnsafeCell};
+use {
+	super::*,
+	std::{
+		cell::UnsafeCell,
+		collections::LinkedList,
+		pin::Pin,
+		task::{Poll, Waker}
+	}
+};
 
 #[derive(Debug)]
 enum QueryState {
@@ -43,12 +51,12 @@ struct SchedulerQueue {
 
 #[derive(Debug)]
 pub struct Scheduler {
-	stream: __UnsafeCell__<AsyncStream>,
+	stream: __UnsafeCell__<wire::AsyncStream>,
 	queue:  smol::lock::Mutex<SchedulerQueue>
 }
 
 impl Scheduler {
-	pub fn new(stream: AsyncStream) -> Self {
+	pub fn new(stream: wire::AsyncStream) -> Self {
 		Self {
 			queue:   smol::lock::Mutex::new(SchedulerQueue {
 				wake:  None,
@@ -58,7 +66,7 @@ impl Scheduler {
 		}
 	}
 	
-	pub async fn set_stream(&self, stream: AsyncStream) {
+	pub async fn set_stream(&self, stream: wire::AsyncStream) {
 		// spin lock until the queue is empty, so it is safe to replace the stream
 		loop {
 			let queue = self.queue.lock().await;

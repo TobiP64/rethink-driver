@@ -23,7 +23,8 @@
 #![allow(dead_code)]
 
 use {
-	rethink_driver::*,
+	std::borrow::Cow,
+	rethink_driver::{*, reql::*},
 	log::{Metadata, Record},
 	serde::Deserialize
 };
@@ -35,14 +36,14 @@ static LOGGER: Logger = Logger;
 
 #[derive(Deserialize, Debug)]
 struct Test {
-	id: String,
+	id:   String,
 	test: usize
 }
 
 #[test]
 fn test_rdbid() {
 	use std::str::FromStr;
-	let id = RDbId::from_str("1065a246-64d2-4dea-a191-506f653732ac").unwrap();
+	let id = Id::from_str("1065a246-64d2-4dea-a191-506f653732ac").unwrap();
 	assert_eq!(id.0, 0x1065a24664d24deaa191506f653732ac);
 	assert_eq!(&id.to_string(), "1065a246-64d2-4dea-a191-506f653732ac");
 }
@@ -87,7 +88,7 @@ fn connect_success_async() {
 #[ignore]
 fn connect_invalid_user() {
 	let err = ConnectionOptions {
-		user: Some("invalid".to_string()),
+		user: Cow::Borrowed("invalid"),
 		..ConnectionOptions::default()
 	}.connect();
 	
@@ -100,7 +101,7 @@ fn connect_invalid_user() {
 fn connect_invalid_user_async() {
 	smol::block_on(async {
 		let err = ConnectionOptions {
-			user: Some("invalid".to_string()),
+			user: Cow::Borrowed("invalid"),
 			..ConnectionOptions::default()
 		}.connect_async().await;
 		
@@ -134,7 +135,7 @@ fn query_bad_request() {
 fn query_no_db() {
 	let conn = init_conn();
 	let err = db("non-existent_db")
-		.table("test")
+		.table::<_, Ignored, Ignored>("test", None)
 		.run::<String>(&conn, None)
 		.unwrap()
 		.next()
@@ -151,7 +152,7 @@ fn query_no_db_async() {
 	smol::block_on(async {
 		let conn = init_conn_async().await;
 		let err = db("non-existent_db")
-			.table("test")
+			.table::<_, Ignored, Ignored>("test", None)
 			.run_async::<String>(&conn, None).await
 			.unwrap()
 			.next().await
@@ -170,7 +171,7 @@ fn query_serde_err() {
 	
 	let conn = init_conn();
 	let err = db("test")
-		.table("test")
+		.table::<_, Ignored, Ignored>("test", None)
 		.run::<Test>(&conn, None)
 		.unwrap()
 		.next();
@@ -188,7 +189,7 @@ fn query_serde_err_async() {
 		
 		let conn = init_conn_async().await;
 		let err = db("test")
-			.table("test")
+			.table::<_, Ignored, Ignored>("test", None)
 			.run_async::<Test>(&conn, None).await
 			.unwrap()
 			.next().await;
@@ -202,7 +203,7 @@ fn query_serde_err_async() {
 fn query_success() {
 	let conn = init_conn();
 	let ok = db("test")
-		.table("test")
+		.table::<_, Ignored, Ignored>("test", None)
 		.run::<Test>(&conn, None);
 	
 	debug_assert!(ok.is_ok());
@@ -215,7 +216,7 @@ fn query_success_async() {
 	smol::block_on(async {
 		let conn = init_conn_async().await;
 		let ok = db("test")
-			.table("test")
+			.table::<_, Ignored, Ignored>("test", None)
 			.run_async::<Test>(&conn, None).await;
 		
 		debug_assert!(ok.is_ok());
@@ -227,7 +228,7 @@ fn query_success_async() {
 fn query_with_options_success() {
 	let conn = init_conn();
 	let ok = db("test")
-		.table("test")
+		.table::<_, Ignored, Ignored>("test", None)
 		.run::<Test>(&conn, Some(QueryOptions {
 			read_mode: Some(ReadMode::Majority),
 			.. QueryOptions::default()
@@ -243,7 +244,7 @@ fn query_with_options_success_async() {
 	smol::block_on(async {
 		let conn = init_conn_async().await;
 		let ok = db("test")
-			.table("test")
+			.table::<_, Ignored, Ignored>("test", None)
 			.run_async::<Test>(&conn, Some(QueryOptions {
 				read_mode: Some(ReadMode::Majority),
 				.. QueryOptions::default()
@@ -259,7 +260,7 @@ fn query_with_options_success_async() {
 fn query_noreply() {
 	let conn = init_conn();
 	let ok = db("test")
-		.table("test")
+		.table::<_, Ignored, Ignored>("test", None)
 		.run::<()>(&conn, Some(QueryOptions {
 			noreply: Some(true),
 			.. QueryOptions::default()
@@ -275,7 +276,7 @@ fn query_noreply_async() {
 	smol::block_on(async {
 		let conn = init_conn_async().await;
 		let ok = db("test")
-			.table("test")
+			.table::<_, Ignored, Ignored>("test", None)
 			.run_async::<()>(&conn, Some(QueryOptions {
 				noreply: Some(true),
 				.. QueryOptions::default()

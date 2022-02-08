@@ -127,16 +127,17 @@ impl<'a> ServerMessage<'a> {
 pub fn handshake(stream: &mut (impl Read + Write), options: &ConnectionOptions) -> Result<()> {
 	let start    = std::time::Instant::now();
 	let mut buf  = [0u8; DEFAULT_BUFFER_LEN];
-	let user     = stringprep::saslprep(options.user.as_deref().unwrap_or(DEFAULT_USER)).unwrap();
-	let password = stringprep::saslprep(options.password.as_deref().unwrap_or(DEFAULT_PWD)).unwrap();
+	let user     = stringprep::saslprep(options.user.as_ref()).unwrap();
+	let password = stringprep::saslprep(options.password.as_ref()).unwrap();
 	
 	// protocol and server versions
 	
-	stream.write_all(&VERSION_1_0.to_le_bytes())?;
+	stream.write_all(&wire::VERSION_1_0.to_le_bytes())?;
 	stream.flush()?;
 	
 	let (server_version, _) = ServerVersionMessage::recv(stream, &mut buf)?;
-	log::info!("{:?}", server_version);
+	log::info!("server version: {}, min protocol version: {}, max protocol version: {}",
+		server_version.server_version, server_version.min_protocol_version, server_version.max_protocol_version);
 	
 	// client first message
 	
@@ -219,16 +220,17 @@ pub fn handshake(stream: &mut (impl Read + Write), options: &ConnectionOptions) 
 pub async fn handshake_async(stream: &mut (impl smol::io::AsyncReadExt + smol::io::AsyncWriteExt + Unpin), options: &ConnectionOptions) -> Result<()> {
 	let start    = std::time::Instant::now();
 	let mut buf  = [0u8; DEFAULT_BUFFER_LEN];
-	let user     = stringprep::saslprep(options.user.as_deref().unwrap_or(DEFAULT_USER)).unwrap();
-	let password = stringprep::saslprep(options.password.as_deref().unwrap_or(DEFAULT_PWD)).unwrap();
+	let user     = stringprep::saslprep(options.user.as_ref()).unwrap();
+	let password = stringprep::saslprep(options.password.as_ref()).unwrap();
 	
 	// protocol and server versions
 	
-	stream.write_all(&VERSION_1_0.to_le_bytes()).await?;
+	stream.write_all(&wire::VERSION_1_0.to_le_bytes()).await?;
 	stream.flush().await?;
 	
 	let (server_version, _) = ServerVersionMessage::recv_async(stream, &mut buf).await?;
-	log::info!("{:?}", server_version);
+	log::info!("server version: {}, min protocol version: {}, max protocol version: {}",
+		server_version.server_version, server_version.min_protocol_version, server_version.max_protocol_version);
 	
 	// client first message
 	

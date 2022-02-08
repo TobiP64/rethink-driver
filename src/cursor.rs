@@ -22,6 +22,9 @@
 
 use {crate::*, std::collections::VecDeque, serde::de::DeserializeOwned};
 
+#[cfg(feature = "async")]
+use std::{pin::Pin, task::{Poll, Context}};
+
 pub struct Cursor<T: DeserializeOwned> {
 	pub conn: Connection,
 	pub token:  QueryToken,
@@ -115,6 +118,8 @@ impl<T: 'static + DeserializeOwned + Send + Sync> smol::stream::Stream for Async
 	type Item = Result<T>;
 	
 	fn poll_next(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Option<Self::Item>> {
+		use smol::future::FutureExt;
+		
 		let self_ = unsafe { Pin::into_inner_unchecked(self) };
 		let self_ = unsafe { &mut*(self_ as *mut Self) };
 		

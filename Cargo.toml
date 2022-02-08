@@ -1,6 +1,6 @@
 [package]
 name        = "rethink-driver"
-version     = "1.0.0"
+version     = "1.1.0"
 authors     = ["Tobias Pfeiffer <tobias@tobiaspfeiffer.net>"]
 edition     = "2021"
 publish     = false
@@ -28,6 +28,6 @@ base64           = "^0.13"
 stringprep       = "^0.1"
 # TLS and async
 webpki       = { version = "^0.21", optional = true }
-rustls       = { version = "^0.18", optional = true }
-async-rustls = { version = "^0.1", optional = true }
+rustls       = { version = "0.19.1", optional = true }
+async-rustls = { version = "^0.2", optional = true }
 smol         = { version = "^1.2", optional = true }
