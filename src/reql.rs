@@ -282,17 +282,19 @@ impl<SIG, A: Serialize, O: Serialize, const N: usize> Serialize for TermRepr<SIG
 
 // FUNCTION
 
+type FunctionTerm<A, O> = TermRepr<fn(Top, Top) -> Top, (TermRepr<fn(VarArg<Datum>) -> Array, (A,), Ignored, 2>, O), Ignored, 69>;
+
 pub fn funcall<T: Term<Function<A, O>>, A, O, Args: Term<VarArg<Datum>>>(f: T, args: Args) -> TermRepr<fn(Function<A, O>, VarArg<Datum>) -> Datum, (T, Args), Ignored, 64> {
 	TermRepr { _sig: PhantomData, args: (f, args), opts: None }
 }
 
 //impl_types!(impl ( T: Function<A, O>, A, O, Args: VarArg<dyn Datum> ) Datum for Term<(T, Args), (), 64>);
 
-pub fn c<F: Closure<Args, T, Output = T>, Args, T: Serialize>(f: F) -> TermRepr<fn(Top, Top) -> Top, (TermRepr<fn(VarArg<Datum>) -> Array, (F::Input,), Ignored, 2>, F::Output), Ignored, 69> {
+pub fn c<F: Closure<Args, T, Output = T>, Args, T: Serialize>(f: F) -> FunctionTerm<F::Input, F::Output> {
 	f.evaluate()
 }
 
-pub fn closure<F: Closure<Args, T, Output = T>, Args, T: Serialize>(f: F) -> TermRepr<fn(Top, Top) -> Top, (TermRepr<fn(VarArg<Datum>) -> Array, (F::Input,), Ignored, 2>, F::Output), Ignored, 69> {
+pub fn closure<F: Closure<Args, T, Output = T>, Args, T: Serialize>(f: F) -> FunctionTerm<F::Input, F::Output> {
 	f.evaluate()
 }
 
@@ -300,7 +302,7 @@ pub trait Closure<Args, T: Serialize> {
 	type Input:  Serialize;
 	type Output: Serialize;
 	
-	fn evaluate(self) -> TermRepr<fn(Top, Top) -> Top, (TermRepr<fn(VarArg<Datum>) -> Array, (Self::Input,), Ignored, 2>, Self::Output), Ignored, 69>;
+	fn evaluate(self) -> FunctionTerm<Self::Input, Self::Output>;
 }
 
 macro_rules! closure {
@@ -314,11 +316,30 @@ macro_rules! closure {
 			type Input  = ( $( Var<$ident>, )* );
 			type Output = T;
 			
-			fn evaluate(self) -> TermRepr<fn(Top, Top) -> Top, (TermRepr<fn(VarArg<Datum>) -> Array, (Self::Input,), Ignored, 2>, Self::Output), Ignored, 69> {
+			fn evaluate(self) -> FunctionTerm<Self::Input, Self::Output> {
 				let ( $( $ident, )* ) = ( $( Var::<$ident>::default(), )* );
 				func(make_array( ( $( $ident, )* ) ), (self)( $( $ident, )* ))
 			}
 		}
+		
+		impl< O: Term<Top>,             $( $ident, )* > Term<Function<( $( $ident, )* ), Top>>             for FunctionTerm<( $( Var<$ident>, )* ), O> {}
+		impl< O: Term<Datum>,           $( $ident, )* > Term<Function<( $( $ident, )* ), Datum>>           for FunctionTerm<( $( Var<$ident>, )* ), O> {}
+		impl< O: Term<Null>,            $( $ident, )* > Term<Function<( $( $ident, )* ), Null>>            for FunctionTerm<( $( Var<$ident>, )* ), O> {}
+		impl< O: Term<Bool>,            $( $ident, )* > Term<Function<( $( $ident, )* ), Bool>>            for FunctionTerm<( $( Var<$ident>, )* ), O> {}
+		impl< O: Term<Number>,          $( $ident, )* > Term<Function<( $( $ident, )* ), Number>>          for FunctionTerm<( $( Var<$ident>, )* ), O> {}
+		impl< O: Term<String>,          $( $ident, )* > Term<Function<( $( $ident, )* ), String>>          for FunctionTerm<( $( Var<$ident>, )* ), O> {}
+		impl< O: Term<Object>,          $( $ident, )* > Term<Function<( $( $ident, )* ), Object>>          for FunctionTerm<( $( Var<$ident>, )* ), O> {}
+		impl< O: Term<SingleSelection>, $( $ident, )* > Term<Function<( $( $ident, )* ), SingleSelection>> for FunctionTerm<( $( Var<$ident>, )* ), O> {}
+		impl< O: Term<Array>,           $( $ident, )* > Term<Function<( $( $ident, )* ), Array>>           for FunctionTerm<( $( Var<$ident>, )* ), O> {}
+		impl< O: Term<Sequence>,        $( $ident, )* > Term<Function<( $( $ident, )* ), Sequence>>        for FunctionTerm<( $( Var<$ident>, )* ), O> {}
+		impl< O: Term<Stream>,          $( $ident, )* > Term<Function<( $( $ident, )* ), Stream>>          for FunctionTerm<( $( Var<$ident>, )* ), O> {}
+		impl< O: Term<StreamSelection>, $( $ident, )* > Term<Function<( $( $ident, )* ), StreamSelection>> for FunctionTerm<( $( Var<$ident>, )* ), O> {}
+		impl< O: Term<Table>,           $( $ident, )* > Term<Function<( $( $ident, )* ), Table>>           for FunctionTerm<( $( Var<$ident>, )* ), O> {}
+		impl< O: Term<Database>,        $( $ident, )* > Term<Function<( $( $ident, )* ), Database>>        for FunctionTerm<( $( Var<$ident>, )* ), O> {}
+		impl< O: Term<Function<A0, O0>>, A0, O0, $( $ident, )* > Term<Function<( $( $ident, )* ), Function<A0, O0>>> for FunctionTerm<( $( Var<$ident>, )* ), O> {}
+		impl< O: Term<Ordering>,        $( $ident, )* > Term<Function<( $( $ident, )* ), Ordering>>        for FunctionTerm<( $( Var<$ident>, )* ), O> {}
+		impl< O: Term<PathSpec>,        $( $ident, )* > Term<Function<( $( $ident, )* ), PathSpec>>        for FunctionTerm<( $( Var<$ident>, )* ), O> {}
+		impl< O: Term<Error>,           $( $ident, )* > Term<Function<( $( $ident, )* ), Error>>           for FunctionTerm<( $( Var<$ident>, )* ), O> {}
 	};
 	(@count $ident:ident) => { 1 };
 	(@foreach $ident:ident do $( $tt:tt )* ) => { $( $tt )* };
@@ -842,5 +863,11 @@ mod tests {
 	fn function_term() {
 		let v = serde_json::to_string(&c(|a: Var<Number>, b: Var<Number>| { a.add(b) })).unwrap();
 		assert_eq!(&v, "[69,[[2,[1,2]],[24,[[10,[1]],[10,[2]]]]]]");
+	}
+	
+	#[test]
+	fn function_compile() {
+		fn f(v : impl Term<Function<(Datum, Datum), Bool>>) {}
+		f(c(|a: Var<Datum>, b: Var<Datum>| { a.eq(b) }));
 	}
 }
