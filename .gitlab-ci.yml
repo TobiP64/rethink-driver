@@ -1,8 +1,17 @@
 include: https://gitlab.com/TobiP64/rust-gitlab-ci/-/raw/master/rust.gitlab-ci.yml
 
+.rust-default:
+     parallel:
+        matrix:
+            -   CHANNEL: [ nightly ]
+                
 build:
     parallel:
         matrix:
             -   CHANNEL: [ nightly ]
                 PROFILE: [ debug, release ]
-                TARGET:  [ x86_64-unknown-linux-musl ]
+                TARGET:  [ x86_64-unknown-linux-gnu ]
+
+build:docs:
+    script:
+        - cargo +nightly doc --color=always --verbose --no-deps $CARGO_OPTS
