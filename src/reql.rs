@@ -31,6 +31,7 @@ use {
 
 #[cfg(feature = "async")]
 use std::{future::Future, pin::Pin};
+use serde::ser::SerializeSeq;
 
 static QUERY_VAR_COUNTER: AtomicUsize = AtomicUsize::new(0);
 
@@ -219,17 +220,6 @@ impl_types!(impl String for str);
 impl_types!(impl ( 'a ) String for &'a str);
 impl_types!(impl String for std::string::String);
 impl_types!(impl ( 'a ) String for &'a std::string::String);
-impl_types!(impl ( T: Term<Top> ) Array for [T]);
-impl_types!(impl ( T: Term<Top> ) Array for std::vec::Vec<T>);
-impl_types!(impl ( T: Term<Top> ) Object for std::collections::HashMap<std::string::String, T>);
-impl_types!(impl ( T0: Term<Top> ) Array for (T0,));
-impl_types!(impl ( T0: Term<Top>, T1: Term<Top> ) Array for (T0, T1));
-impl_types!(impl ( T0: Term<Top>, T1: Term<Top>, T2: Term<Top> ) Array for (T0, T1, T2));
-impl_types!(impl ( T0: Term<Top>, T1: Term<Top>, T2: Term<Top>, T3: Term<Top> ) Array for (T0, T1, T2, T3));
-impl_types!(impl ( T0: Term<Top>, T1: Term<Top>, T2: Term<Top>, T3: Term<Top>, T4: Term<Top> ) Array for (T0, T1, T2, T3, T4));
-impl_types!(impl ( T0: Term<Top>, T1: Term<Top>, T2: Term<Top>, T3: Term<Top>, T4: Term<Top>, T5: Term<Top> ) Array for (T0, T1, T2, T3, T4, T5));
-impl_types!(impl ( T0: Term<Top>, T1: Term<Top>, T2: Term<Top>, T3: Term<Top>, T4: Term<Top>, T5: Term<Top>, T6: Term<Top> ) Array for (T0, T1, T2, T3, T4, T5, T6));
-impl_types!(impl ( T0: Term<Top>, T1: Term<Top>, T2: Term<Top>, T3: Term<Top>, T4: Term<Top>, T5: Term<Top>, T6: Term<Top>, T7: Term<Top> ) Array for (T0, T1, T2, T3, T4, T5, T6, T7));
 
 impl<T: Term<Datum>> Term<PathSpec> for T {}
 //impl<T: Term<String>> Term<PathSpec> for T {}
@@ -275,34 +265,171 @@ pub struct TermRepr<SIG, A: Serialize, O: Serialize, const N: usize> {
 impl<SIG, A: Serialize, O: Serialize, const N: usize> Serialize for TermRepr<SIG, A, O, N> {
 	fn serialize<S: Serializer>(&self, serializer: S) -> std::result::Result<S::Ok, S::Error> {
 		#[derive(Serialize)]
-		struct Repr<'a, A, O>(usize, &'a A, #[serde(default, skip_serializing_if = "Option::is_none")] &'a Option<O>);
+		struct Repr<'a, A: Serialize, O: Serialize>(
+			usize,
+			#[serde(serialize_with = "ser_args")] &'a A,
+			#[serde(skip_serializing_if = "Option::is_none")] &'a Option<O>
+		);
+		
+		pub fn ser_args<S: Serializer, T: Serialize>(v: &&T, s: S) -> std::result::Result<S::Ok, S::Error> {
+			struct Se<S: Serializer>(S);
+			
+			impl<S: Serializer> Serializer for Se<S> {
+				type Ok                     = S::Ok;
+				type Error                  = S::Error;
+				type SerializeSeq           = S::SerializeSeq;
+				type SerializeTuple         = S::SerializeTuple;
+				type SerializeTupleStruct   = S::SerializeTupleStruct;
+				type SerializeTupleVariant  = S::SerializeTupleVariant;
+				type SerializeMap           = S::SerializeMap;
+				type SerializeStruct        = S::SerializeStruct;
+				type SerializeStructVariant = S::SerializeStructVariant;
+				
+				fn serialize_bool(self, _v: bool) -> std::result::Result<Self::Ok, Self::Error> {
+					todo!()
+				}
+				
+				fn serialize_i8(self, _v: i8) -> std::result::Result<Self::Ok, Self::Error> {
+					todo!()
+				}
+				
+				fn serialize_i16(self, _v: i16) -> std::result::Result<Self::Ok, Self::Error> {
+					todo!()
+				}
+				
+				fn serialize_i32(self, _v: i32) -> std::result::Result<Self::Ok, Self::Error> {
+					todo!()
+				}
+				
+				fn serialize_i64(self, _v: i64) -> std::result::Result<Self::Ok, Self::Error> {
+					todo!()
+				}
+				
+				fn serialize_u8(self, _v: u8) -> std::result::Result<Self::Ok, Self::Error> {
+					todo!()
+				}
+				
+				fn serialize_u16(self, _v: u16) -> std::result::Result<Self::Ok, Self::Error> {
+					todo!()
+				}
+				
+				fn serialize_u32(self, _v: u32) -> std::result::Result<Self::Ok, Self::Error> {
+					todo!()
+				}
+				
+				fn serialize_u64(self, _v: u64) -> std::result::Result<Self::Ok, Self::Error> {
+					todo!()
+				}
+				
+				fn serialize_f32(self, _v: f32) -> std::result::Result<Self::Ok, Self::Error> {
+					todo!()
+				}
+				
+				fn serialize_f64(self, _v: f64) -> std::result::Result<Self::Ok, Self::Error> {
+					todo!()
+				}
+				
+				fn serialize_char(self, _v: char) -> std::result::Result<Self::Ok, Self::Error> {
+					todo!()
+				}
+				
+				fn serialize_str(self, _v: &str) -> std::result::Result<Self::Ok, Self::Error> {
+					todo!()
+				}
+				
+				fn serialize_bytes(self, _v: &[u8]) -> std::result::Result<Self::Ok, Self::Error> {
+					todo!()
+				}
+				
+				fn serialize_none(self) -> std::result::Result<Self::Ok, Self::Error> {
+					todo!()
+				}
+				
+				fn serialize_some<T: ?Sized>(self, _value: &T) -> std::result::Result<Self::Ok, Self::Error> where T: Serialize {
+					todo!()
+				}
+				
+				fn serialize_unit(self) -> std::result::Result<Self::Ok, Self::Error> {
+					self.serialize_seq(Some(0))?.end()
+				}
+				
+				fn serialize_unit_struct(self, _name: &'static str) -> std::result::Result<Self::Ok, Self::Error> {
+					todo!()
+				}
+				
+				fn serialize_unit_variant(self, _name: &'static str, _variant_index: u32, _variant: &'static str) -> std::result::Result<Self::Ok, Self::Error> {
+					todo!()
+				}
+				
+				fn serialize_newtype_struct<T: ?Sized>(self, _name: &'static str, _value: &T) -> std::result::Result<Self::Ok, Self::Error> where T: Serialize {
+					todo!()
+				}
+				
+				fn serialize_newtype_variant<T: ?Sized>(self, _name: &'static str, _variant_index: u32, _variant: &'static str, _value: &T) -> std::result::Result<Self::Ok, Self::Error> where T: Serialize {
+					todo!()
+				}
+				
+				fn serialize_seq(self, len: Option<usize>) -> std::result::Result<Self::SerializeSeq, Self::Error> {
+					self.0.serialize_seq(len)
+				}
+				
+				fn serialize_tuple(self, len: usize) -> std::result::Result<Self::SerializeTuple, Self::Error> {
+					self.0.serialize_tuple(len)
+				}
+				
+				fn serialize_tuple_struct(self, _name: &'static str, _len: usize) -> std::result::Result<Self::SerializeTupleStruct, Self::Error> {
+					todo!()
+				}
+				
+				fn serialize_tuple_variant(self, _name: &'static str, _variant_index: u32, _variant: &'static str, _len: usize) -> std::result::Result<Self::SerializeTupleVariant, Self::Error> {
+					todo!()
+				}
+				
+				fn serialize_map(self, _len: Option<usize>) -> std::result::Result<Self::SerializeMap, Self::Error> {
+					todo!()
+				}
+				
+				fn serialize_struct(self, _name: &'static str, _len: usize) -> std::result::Result<Self::SerializeStruct, Self::Error> {
+					todo!()
+				}
+				
+				fn serialize_struct_variant(self, _name: &'static str, _variant_index: u32, _variant: &'static str, _len: usize) -> std::result::Result<Self::SerializeStructVariant, Self::Error> {
+					todo!()
+				}
+			}
+			
+			v.serialize(Se(s))
+		}
+		
 		Repr(N, &self.args, &self.opts).serialize(serializer)
 	}
 }
 
 // FUNCTION
 
-type FunctionTerm<A, O> = TermRepr<fn(Top, Top) -> Top, (TermRepr<fn(VarArg<Datum>) -> Array, (A,), Ignored, 2>, O), Ignored, 69>;
+type FunctionTerm<A, O> = TermRepr<fn(Top, Top) -> Top, (TermRepr<fn() -> Array, A, Ignored, 2>, O), Ignored, 69>;
 
 pub fn funcall<T: Term<Function<A, O>>, A, O, Args: Term<VarArg<Datum>>>(f: T, args: Args) -> TermRepr<fn(Function<A, O>, VarArg<Datum>) -> Datum, (T, Args), Ignored, 64> {
 	TermRepr { _sig: PhantomData, args: (f, args), opts: None }
 }
 
-//impl_types!(impl ( T: Function<A, O>, A, O, Args: VarArg<dyn Datum> ) Datum for Term<(T, Args), (), 64>);
+impl<T: Term<Function<A, O>>, A, O, Args: Term<VarArg<Datum>>> Term<Top> for TermRepr<fn(Function<A, O>, VarArg<Datum>) -> Datum, (T, Args), Ignored, 64> {}
+impl<T: Term<Function<A, O>>, A, O, Args: Term<VarArg<Datum>>> Term<Datum> for TermRepr<fn(Function<A, O>, VarArg<Datum>) -> Datum, (T, Args), Ignored, 64> {}
 
-pub fn c<F: Closure<Args, T, Output = T>, Args, T: Serialize>(f: F) -> FunctionTerm<F::Input, F::Output> {
+pub fn c<F: Closure<I, O, Input = I, Output = O>, I: Serialize, O: Serialize>(f: F) -> FunctionTerm<F::Args, F::Output> {
 	f.evaluate()
 }
 
-pub fn closure<F: Closure<Args, T, Output = T>, Args, T: Serialize>(f: F) -> FunctionTerm<F::Input, F::Output> {
+pub fn closure<F: Closure<I, O, Input = I, Output = O>, I: Serialize, O: Serialize>(f: F) -> FunctionTerm<F::Args, F::Output> {
 	f.evaluate()
 }
 
-pub trait Closure<Args, T: Serialize> {
+pub trait Closure<I: Serialize, O: Serialize> {
 	type Input:  Serialize;
 	type Output: Serialize;
+	type Args:   Serialize;
 	
-	fn evaluate(self) -> FunctionTerm<Self::Input, Self::Output>;
+	fn evaluate(self) -> FunctionTerm<Self::Args, Self::Output>;
 }
 
 macro_rules! closure {
@@ -312,34 +439,35 @@ macro_rules! closure {
 	};
 	() => {};
 	(@impl $( $ident:ident, )* ) => {
-		impl<F: FnOnce( $( Var<$ident>, )* ) -> T, T: Term<Top>, $( $ident, )* > Closure< ( $( Var<$ident>, )* ), T> for F where $( Var<$ident>: Term<Datum>, )* {
+		impl<F: FnOnce( $( Var<$ident>, )* ) -> T, T: Term<Top>, $( $ident, )* > Closure< ( $( Var<$ident>, )* ), T > for F where $( Var<$ident>: Term<Datum>, )* {
 			type Input  = ( $( Var<$ident>, )* );
 			type Output = T;
+			type Args   = ( $( closure!(@foreach $ident do usize ), )* );
 			
-			fn evaluate(self) -> FunctionTerm<Self::Input, Self::Output> {
+			fn evaluate(self) -> FunctionTerm<Self::Args, Self::Output> {
 				let ( $( $ident, )* ) = ( $( Var::<$ident>::default(), )* );
-				func(make_array( ( $( $ident, )* ) ), (self)( $( $ident, )* ))
+				func(make_array( ( $( $ident.1, )* ) ), (self)( $( $ident, )* ))
 			}
 		}
 		
-		impl< O: Term<Top>,             $( $ident, )* > Term<Function<( $( $ident, )* ), Top>>             for FunctionTerm<( $( Var<$ident>, )* ), O> {}
-		impl< O: Term<Datum>,           $( $ident, )* > Term<Function<( $( $ident, )* ), Datum>>           for FunctionTerm<( $( Var<$ident>, )* ), O> {}
-		impl< O: Term<Null>,            $( $ident, )* > Term<Function<( $( $ident, )* ), Null>>            for FunctionTerm<( $( Var<$ident>, )* ), O> {}
-		impl< O: Term<Bool>,            $( $ident, )* > Term<Function<( $( $ident, )* ), Bool>>            for FunctionTerm<( $( Var<$ident>, )* ), O> {}
-		impl< O: Term<Number>,          $( $ident, )* > Term<Function<( $( $ident, )* ), Number>>          for FunctionTerm<( $( Var<$ident>, )* ), O> {}
-		impl< O: Term<String>,          $( $ident, )* > Term<Function<( $( $ident, )* ), String>>          for FunctionTerm<( $( Var<$ident>, )* ), O> {}
-		impl< O: Term<Object>,          $( $ident, )* > Term<Function<( $( $ident, )* ), Object>>          for FunctionTerm<( $( Var<$ident>, )* ), O> {}
-		impl< O: Term<SingleSelection>, $( $ident, )* > Term<Function<( $( $ident, )* ), SingleSelection>> for FunctionTerm<( $( Var<$ident>, )* ), O> {}
-		impl< O: Term<Array>,           $( $ident, )* > Term<Function<( $( $ident, )* ), Array>>           for FunctionTerm<( $( Var<$ident>, )* ), O> {}
-		impl< O: Term<Sequence>,        $( $ident, )* > Term<Function<( $( $ident, )* ), Sequence>>        for FunctionTerm<( $( Var<$ident>, )* ), O> {}
-		impl< O: Term<Stream>,          $( $ident, )* > Term<Function<( $( $ident, )* ), Stream>>          for FunctionTerm<( $( Var<$ident>, )* ), O> {}
-		impl< O: Term<StreamSelection>, $( $ident, )* > Term<Function<( $( $ident, )* ), StreamSelection>> for FunctionTerm<( $( Var<$ident>, )* ), O> {}
-		impl< O: Term<Table>,           $( $ident, )* > Term<Function<( $( $ident, )* ), Table>>           for FunctionTerm<( $( Var<$ident>, )* ), O> {}
-		impl< O: Term<Database>,        $( $ident, )* > Term<Function<( $( $ident, )* ), Database>>        for FunctionTerm<( $( Var<$ident>, )* ), O> {}
-		impl< O: Term<Function<A0, O0>>, A0, O0, $( $ident, )* > Term<Function<( $( $ident, )* ), Function<A0, O0>>> for FunctionTerm<( $( Var<$ident>, )* ), O> {}
-		impl< O: Term<Ordering>,        $( $ident, )* > Term<Function<( $( $ident, )* ), Ordering>>        for FunctionTerm<( $( Var<$ident>, )* ), O> {}
-		impl< O: Term<PathSpec>,        $( $ident, )* > Term<Function<( $( $ident, )* ), PathSpec>>        for FunctionTerm<( $( Var<$ident>, )* ), O> {}
-		impl< O: Term<Error>,           $( $ident, )* > Term<Function<( $( $ident, )* ), Error>>           for FunctionTerm<( $( Var<$ident>, )* ), O> {}
+		impl< O: Term<Top>,             $( $ident, )* > Term<Function<( $( $ident, )* ), Top>>             for FunctionTerm<( $( closure!(@foreach $ident do usize ), )* ), O> {}
+		impl< O: Term<Datum>,           $( $ident, )* > Term<Function<( $( $ident, )* ), Datum>>           for FunctionTerm<( $( closure!(@foreach $ident do usize ), )* ), O> {}
+		impl< O: Term<Null>,            $( $ident, )* > Term<Function<( $( $ident, )* ), Null>>            for FunctionTerm<( $( closure!(@foreach $ident do usize ), )* ), O> {}
+		impl< O: Term<Bool>,            $( $ident, )* > Term<Function<( $( $ident, )* ), Bool>>            for FunctionTerm<( $( closure!(@foreach $ident do usize ), )* ), O> {}
+		impl< O: Term<Number>,          $( $ident, )* > Term<Function<( $( $ident, )* ), Number>>          for FunctionTerm<( $( closure!(@foreach $ident do usize ), )* ), O> {}
+		impl< O: Term<String>,          $( $ident, )* > Term<Function<( $( $ident, )* ), String>>          for FunctionTerm<( $( closure!(@foreach $ident do usize ), )* ), O> {}
+		impl< O: Term<Object>,          $( $ident, )* > Term<Function<( $( $ident, )* ), Object>>          for FunctionTerm<( $( closure!(@foreach $ident do usize ), )* ), O> {}
+		impl< O: Term<SingleSelection>, $( $ident, )* > Term<Function<( $( $ident, )* ), SingleSelection>> for FunctionTerm<( $( closure!(@foreach $ident do usize ), )* ), O> {}
+		impl< O: Term<Array>,           $( $ident, )* > Term<Function<( $( $ident, )* ), Array>>           for FunctionTerm<( $( closure!(@foreach $ident do usize ), )* ), O> {}
+		impl< O: Term<Sequence>,        $( $ident, )* > Term<Function<( $( $ident, )* ), Sequence>>        for FunctionTerm<( $( closure!(@foreach $ident do usize ), )* ), O> {}
+		impl< O: Term<Stream>,          $( $ident, )* > Term<Function<( $( $ident, )* ), Stream>>          for FunctionTerm<( $( closure!(@foreach $ident do usize ), )* ), O> {}
+		impl< O: Term<StreamSelection>, $( $ident, )* > Term<Function<( $( $ident, )* ), StreamSelection>> for FunctionTerm<( $( closure!(@foreach $ident do usize ), )* ), O> {}
+		impl< O: Term<Table>,           $( $ident, )* > Term<Function<( $( $ident, )* ), Table>>           for FunctionTerm<( $( closure!(@foreach $ident do usize ), )* ), O> {}
+		impl< O: Term<Database>,        $( $ident, )* > Term<Function<( $( $ident, )* ), Database>>        for FunctionTerm<( $( closure!(@foreach $ident do usize ), )* ), O> {}
+		impl< O: Term<Function<A0, O0>>, A0, O0, $( $ident, )* > Term<Function<( $( $ident, )* ), Function<A0, O0>>> for FunctionTerm<( $( closure!(@foreach $ident do usize ), )* ), O> {}
+		impl< O: Term<Ordering>,        $( $ident, )* > Term<Function<( $( $ident, )* ), Ordering>>        for FunctionTerm<( $( closure!(@foreach $ident do usize ), )* ), O> {}
+		impl< O: Term<PathSpec>,        $( $ident, )* > Term<Function<( $( $ident, )* ), PathSpec>>        for FunctionTerm<( $( closure!(@foreach $ident do usize ), )* ), O> {}
+		impl< O: Term<Error>,           $( $ident, )* > Term<Function<( $( $ident, )* ), Error>>           for FunctionTerm<( $( closure!(@foreach $ident do usize ), )* ), O> {}
 	};
 	(@count $ident:ident) => { 1 };
 	(@foreach $ident:ident do $( $tt:tt )* ) => { $( $tt )* };
@@ -398,6 +526,9 @@ pub struct VarArg<T>(PhantomData<T>);
 macro_rules! typed_var_arg {
 	( $ty:ident ) => {
 		typed_var_arg!($ty; T0, T1, T2, T3, T4, T5, T6, T7, T8, T9, T10, T11, T12, T13, T14, T15, );
+		
+		impl<'a, T: Term<$ty>> Term<VarArg<$ty>> for &'a [T] {}
+		impl<T: Term<$ty>> Term<VarArg<$ty>> for Vec<T> {}
 	};
 	( Function; $head:ident, $( $tail:ident, )* ) => {
 		impl< A, O, $head: Term<Function<A, O>>, $( $tail: Term<Function<A, O>>, )* > Term<VarArg<Function<A, O>>> for ( $head, $( $tail, )* ) {}
@@ -424,12 +555,21 @@ typed_var_arg!(Stream);
 typed_var_arg!(StreamSelection);
 typed_var_arg!(Table);
 typed_var_arg!(Database);
-typed_var_arg!(Function);
+//typed_var_arg!(Function);
 typed_var_arg!(Ordering);
 typed_var_arg!(PathSpec);
 typed_var_arg!(Error);
 
 // EXPR
+
+#[derive(Copy, Clone, Debug, Default, Serialize)]
+#[serde(transparent)]
+pub struct expr<T: Serialize>(pub T);
+
+impl<T: Serialize> Term<Top> for expr<T> {}
+impl<T: Serialize> Term<Datum> for expr<T> {}
+impl<T: Serialize> Term<Object> for expr<T> {}
+impl<T: Serialize> Term<Sequence> for expr<T> {}
 
 pub struct ExprObjBuilder(serde_json::Map<std::string::String, serde_json::Value>);
 
@@ -467,7 +607,7 @@ impl ExprSeqBuilder {
 		self
 	}
 	
-	pub fn finish(&mut self) -> TermRepr<fn(VarArg<Datum>) -> Array, Vec<serde_json::Value>, Ignored, 2> {
+	pub fn finish(&mut self) -> TermRepr<fn() -> Array, Vec<serde_json::Value>, Ignored, 2> {
 		TermRepr { _sig: PhantomData, args: std::mem::take(&mut self.0), opts: None }
 	}
 }
@@ -544,7 +684,10 @@ macro_rules! term {
 	) -> $output:ident ) => {
 		#[derive(Clone, Debug, Default, Serialize)]
 		pub struct $opts< $( $opt_name: Term<$opt_type> = Ignored, )* > {
-			$( pub $opt_name: Option<$opt_name>, )*
+			$(
+				#[serde(skip_serializing_if = "Option::is_none")]
+				pub $opt_name: Option<$opt_name>,
+			)*
 		}
 		
 		pub fn $name<
@@ -600,7 +743,11 @@ macro_rules! term {
 	(@infix $( $tt:tt )*) => {};
 }
 
-term!(2  => fn make_array(v: VarArg<Datum>) -> Array);
+pub fn make_array<T: Serialize>(v: T) -> TermRepr<fn() -> Array, T, Ignored, 2> {
+	TermRepr { _sig: PhantomData, args: v, opts: None }
+}
+
+impl_types!(impl ( T: Serialize ) Array for TermRepr<fn() -> Array, T, Ignored, 2>);
 
 pub fn make_obj<T: Serialize>(v: T) -> TermRepr<fn() -> Object, (), T, 3> {
 	TermRepr { _sig: PhantomData, args: (), opts: Some(v) }
@@ -635,20 +782,20 @@ term!(32 => fn has_fields(o: Object, p: VarArg<PathSpec>) -> Bool);
 term!(33 => fn pluck(seq_or_obj: Top, p: VarArg<PathSpec>) -> Top);
 term!(34 => fn without(seq_or_obj: Top, p: VarArg<PathSpec>) -> Top);
 term!(35 => fn merge(o: VarArg<Object>) -> Object);
-term!(35 => fn merge_fn(o: Object, f: Function<Datum, Datum>) -> Object);
+term!(35 => fn merge_fn(o: Object, f: Function<(Datum,), Datum>) -> Object);
 term!(35 => fn merge_seq(s: Sequence) -> Sequence);
-term!(35 => fn merge_seq_fn(s: Sequence, f: Function<Datum, Datum>) -> Sequence);
+term!(35 => fn merge_seq_fn(s: Sequence, f: Function<(Datum,), Datum>) -> Sequence);
 term!(36 => fn between_deprecated(s: StreamSelection, a: Datum, b: Datum) -> Bool);
-term!(37 => fn reduce(s: Sequence, f: Function<(Datum, Datum), Datum>) -> Datum);
-term!(38 => fn map(s: Sequence, f: Function<Datum, Datum>) -> Sequence);
+term!(37 => fn reduce(s: Sequence, f: Function<((Datum,), Datum), Datum>) -> Datum);
+term!(38 => fn map(s: Sequence, f: Function<(Datum,), Datum>) -> Sequence);
 term!(39 => fn filter(s: Sequence, o: Object) -> Sequence);
-term!(39 => fn filter_fn(s: Sequence, f: Function<Datum, Bool>) -> Sequence);
-term!(40 => fn concat_map(s: Sequence, f: Function<Datum, Sequence>) -> Sequence);
+term!(39 => fn filter_fn(s: Sequence, f: Function<(Datum,), Bool>) -> Sequence);
+term!(40 => fn concat_map(s: Sequence, f: Function<(Datum,), Sequence>) -> Sequence);
 term!(41 => fn order_by(s: Sequence, o: Ordering, @struct OrderByOptions { index: String } ) -> Sequence);
 term!(42 => fn distinct(s: Sequence) -> Sequence);
 term!(43 => fn count(s: Sequence) -> Number);
 term!(43 => fn count_datum(s: Sequence, v: Datum) -> Number);
-term!(43 => fn count_fn(s: Sequence, f: Function<Datum, Bool>) -> Number);
+term!(43 => fn count_fn(s: Sequence, f: Function<(Datum,), Bool>) -> Number);
 term!(44 => fn union(s: VarArg<Sequence>) -> Sequence);
 term!(45 => fn nth(s: Sequence, n: Number) -> Datum);
 term!(48 => fn inner_join(a: Sequence, b: Sequence, f: Function<(Datum, Datum), Bool>) -> Sequence);
@@ -656,14 +803,14 @@ term!(49 => fn outer_join(a: Sequence, b: Sequence, f: Function<(Datum, Datum), 
 term!(50 => fn eq_join(a: Sequence, s: String, b: Sequence, @struct EqJoinOptions { index: String }) -> Sequence);
 term!(51 => fn coerce_to(v: Top, t: String) -> Top);
 term!(52 => fn type_of(v: Top) -> String);
-term!(53 => fn update_with(s: StreamSelection, f: Function<Object, Object>, @struct UpdateWithOptions { non_atomic: Bool, durability: String, return_changes: Bool } ) -> Object);
-term!(53 => fn update_one_with(s: SingleSelection, f: Function<Object, Object>, @struct UpdateOneWithOptions { non_atomic: Bool, durability: String, return_changes: Bool } ) -> Object);
+term!(53 => fn update_fn(s: StreamSelection, f: Function<(Object,), Object>, @struct UpdateFnOptions { non_atomic: Bool, durability: String, return_changes: Bool } ) -> Object);
+term!(53 => fn update_one_fn(s: SingleSelection, f: Function<(Object,), Object>, @struct UpdateOneFnOptions { non_atomic: Bool, durability: String, return_changes: Bool } ) -> Object);
 term!(53 => fn update(s: StreamSelection, o: Object, @struct UpdateOptions { non_atomic: Bool, durability: String, return_changes: Bool } ) -> Object);
 term!(53 => fn update_one(s: SingleSelection, o: Object, @struct UpdateOneOptions { non_atomic: Bool, durability: String, return_changes: Bool } ) -> Object);
 term!(54 => fn delete(s: StreamSelection, @struct DeleteOptions { durability: String, return_cahnges: Bool } ) -> Object);
 term!(54 => fn delete_one(s: SingleSelection) -> Object);
-term!(55 => fn reaplce(s: StreamSelection, f: Function<Datum, Datum>, @struct ReplaceOptions { non_atomic: Bool, durability: String, return_changes: Bool } ) -> Object);
-term!(55 => fn replace_one(s: SingleSelection, f: Function<Datum, Datum>, @struct ReplaceOneOptions { non_atomic: Bool, durability: String, return_changes: Bool } ) -> Object);
+term!(55 => fn reaplce(s: StreamSelection, f: Function<(Datum,), Datum>, @struct ReplaceOptions { non_atomic: Bool, durability: String, return_changes: Bool } ) -> Object);
+term!(55 => fn replace_one(s: SingleSelection, f: Function<(Datum,), Datum>, @struct ReplaceOneOptions { non_atomic: Bool, durability: String, return_changes: Bool } ) -> Object);
 term!(56 => fn insert(t: Table, o: Object, @struct InsertOptions { conflict: String, durability: String, return_changes: Bool } ) -> Object);
 term!(56 => fn insert_seq(t: Table, s: Sequence, @struct InsertSeqOptions { conflict: String, durability: String, return_changes: Bool } ) -> Object);
 term!(57 => fn db_create(name: String) -> Object);
@@ -679,7 +826,7 @@ term!(62 => fn table_list_db(db: Database) -> Array);
 term!(65 => fn branch(c: Bool, a: Top, b: Top) -> Top);
 term!(66 => fn or(v: VarArg<Bool>) -> Bool);
 term!(67 => fn and(v: VarArg<Bool>) -> Bool);
-term!(68 => fn for_each(s: Sequence, f: Function<Datum, Null>) -> Object);
+term!(68 => fn for_each(s: Sequence, f: Function<(Datum,), Null>) -> Object);
 term!(69 => fn func(args: Top, t: Top) -> Top);
 term!(70 => fn skip(s: Sequence, v: Number) -> Sequence);
 term!(71 => fn limit(s: Sequence, v: Number) -> Sequence);
@@ -687,7 +834,7 @@ term!(72 => fn zip(s: Sequence) -> Sequence);
 term!(73 => fn asc(s: String) -> Ordering);
 term!(74 => fn desc(s: String) -> Ordering);
 term!(75 => fn index_create(t: Table, s: String, @struct IndexCreateOptions { multi: Bool, geo: Bool }) -> Object);
-term!(75 => fn index_create_fn(t: Table, s: String, f: Function<Datum, Datum>, @struct IndexCreateFnOptions { multi: Bool, geo: Bool }) -> Object);
+term!(75 => fn index_create_fn(t: Table, s: String, f: Function<(Datum,), Datum>, @struct IndexCreateFnOptions { multi: Bool, geo: Bool }) -> Object);
 term!(76 => fn index_drop(t: Table, s: String) -> Object);
 term!(77 => fn index_list(t: Table) -> Array);
 term!(78 => fn get_all(t: Table, d: VarArg<Datum>) -> Array);
@@ -701,16 +848,16 @@ term!(84 => fn change_at(a: Array, i: Number, v: Datum) -> Array);
 term!(85 => fn splice_at(a: Array, i: Number, v: Array) -> Array);
 term!(86 => fn is_empty(s: Sequence) -> Bool);
 term!(87 => fn offset_of(s: Sequence, v: Datum) -> Sequence);
-term!(87 => fn offset_of_fn(s: Sequence, f: Function<Datum, Bool>) -> Sequence);
+term!(87 => fn offset_of_fn(s: Sequence, f: Function<(Datum,), Bool>) -> Sequence);
 term!(88 => fn set_insert(a: Array, v: Datum) -> Array);
 term!(89 => fn set_intersection(a: Array, b: Array) -> Array);
 term!(90 => fn set_union(a: Array, b: Array) -> Array);
 term!(91 => fn set_difference(a: Array, b: Array) -> Array);
 term!(92 => fn default_(a: Top, b: Top) -> Top);
 term!(93 => fn contains_one(s: Sequence, v: Datum) -> Bool);
-term!(93 => fn contains_one_fn(s: Sequence, v: Function<Datum, Bool>) -> Bool);
+term!(93 => fn contains_one_fn(s: Sequence, v: Function<(Datum,), Bool>) -> Bool);
 term!(93 => fn contains(s: Sequence, v: VarArg<Datum>) -> Bool);
-term!(93 => fn contains_fn(s: Sequence, v: VarArg<Function<Datum, Bool>>) -> Bool);
+term!(93 => fn contains_fn(s: Sequence, v: VarArg<Function<(Datum,), Bool>>) -> Bool);
 term!(94 => fn keys(o: Object) -> Array);
 term!(95 => fn difference(a: Array, b: Array) -> Array);
 term!(96 => fn with_fields(s: Sequence, p: VarArg<PathSpec>) -> Sequence);
@@ -764,15 +911,15 @@ term!(141 => fn to_uppercase(s: String) -> String);
 term!(142 => fn to_lowercase(s: String) -> String);
 term!(143 => fn create_object(s: String, d: VarArg<Datum>) -> Object);
 term!(144 => fn group(s: Sequence, v: String) -> Sequence);
-term!(144 => fn group_fn(s: Sequence, f: Function<Datum, Datum>) -> Sequence);
+term!(144 => fn group_fn(s: Sequence, f: Function<(Datum,), Datum>) -> Sequence);
 term!(145 => fn sum(s: Sequence, v: String) -> Sequence);
-term!(145 => fn sum_fn(s: Sequence, f: Function<Datum, Datum>) -> Sequence);
+term!(145 => fn sum_fn(s: Sequence, f: Function<(Datum,), Datum>) -> Sequence);
 term!(146 => fn avg(s: Sequence, v: String) -> Sequence);
-term!(146 => fn avg_fn(s: Sequence, f: Function<Datum, Datum>) -> Sequence);
+term!(146 => fn avg_fn(s: Sequence, f: Function<(Datum,), Datum>) -> Sequence);
 term!(147 => fn min(s: Sequence, v: String) -> Sequence);
-term!(147 => fn min_fn(s: Sequence, f: Function<Datum, Datum>) -> Sequence);
+term!(147 => fn min_fn(s: Sequence, f: Function<(Datum,), Datum>) -> Sequence);
 term!(148 => fn max(s: Sequence, v: String) -> Sequence);
-term!(148 => fn max_fn(s: Sequence, f: Function<Datum, Datum>) -> Sequence);
+term!(148 => fn max_fn(s: Sequence, f: Function<(Datum,), Datum>) -> Sequence);
 term!(149 => fn split_whitespace(s: String) -> Array);
 term!(149 => fn split(s: String, p: String) -> Array);
 term!(149 => fn splitn(s: String, p: String, n: Number) -> Array);
@@ -781,7 +928,37 @@ term!(150 => fn ungroup(v: Top) -> Array);
 term!(151 => fn random(start: Number, end: Number, @struct RandomOptions { float: Bool } ) -> Datum);
 term!(152 => fn changes(t: Table) -> Stream);
 term!(153 => fn http(url: String) -> String);
-term!(154 => fn args(a: Array) -> Top);
+
+pub fn args<T: Term<Array>>(v: T) -> TermRepr<fn(Array) -> VarArg<Top>, (T,), Ignored, 154> {
+	TermRepr { _sig: PhantomData, args: (v,), opts: None }
+}
+
+pub trait args: Term<Array> + Sized {
+	fn args(self) -> TermRepr<fn(Array) -> VarArg<Top>, (Self,), Ignored, 154> {
+		args(self)
+	}
+}
+
+impl<T: Term<Array>> args for T {}
+
+impl<T: Term<Array>> Term<VarArg<Top>>                 for TermRepr<fn(Array) -> VarArg<Top>, (T,), Ignored, 154> {}
+impl<T: Term<Array>> Term<VarArg<Datum>>               for TermRepr<fn(Array) -> VarArg<Top>, (T,), Ignored, 154> {}
+impl<T: Term<Array>> Term<VarArg<Null>>                for TermRepr<fn(Array) -> VarArg<Top>, (T,), Ignored, 154> {}
+impl<T: Term<Array>> Term<VarArg<Bool>>                for TermRepr<fn(Array) -> VarArg<Top>, (T,), Ignored, 154> {}
+impl<T: Term<Array>> Term<VarArg<Number>>              for TermRepr<fn(Array) -> VarArg<Top>, (T,), Ignored, 154> {}
+impl<T: Term<Array>> Term<VarArg<String>>              for TermRepr<fn(Array) -> VarArg<Top>, (T,), Ignored, 154> {}
+impl<T: Term<Array>> Term<VarArg<Object>>              for TermRepr<fn(Array) -> VarArg<Top>, (T,), Ignored, 154> {}
+impl<T: Term<Array>> Term<VarArg<SingleSelection>>     for TermRepr<fn(Array) -> VarArg<Top>, (T,), Ignored, 154> {}
+impl<T: Term<Array>> Term<VarArg<Array>>               for TermRepr<fn(Array) -> VarArg<Top>, (T,), Ignored, 154> {}
+impl<T: Term<Array>> Term<VarArg<Sequence>>            for TermRepr<fn(Array) -> VarArg<Top>, (T,), Ignored, 154> {}
+impl<T: Term<Array>> Term<VarArg<Stream>>              for TermRepr<fn(Array) -> VarArg<Top>, (T,), Ignored, 154> {}
+impl<T: Term<Array>> Term<VarArg<StreamSelection>>     for TermRepr<fn(Array) -> VarArg<Top>, (T,), Ignored, 154> {}
+impl<T: Term<Array>> Term<VarArg<Table>>               for TermRepr<fn(Array) -> VarArg<Top>, (T,), Ignored, 154> {}
+impl<T: Term<Array>> Term<VarArg<Database>>            for TermRepr<fn(Array) -> VarArg<Top>, (T,), Ignored, 154> {}
+impl<T: Term<Array>, A, O> Term<VarArg<Function<A, O>>> for TermRepr<fn(Array) -> VarArg<Top>, (T,), Ignored, 154> {}
+impl<T: Term<Array>> Term<VarArg<Ordering>>            for TermRepr<fn(Array) -> VarArg<Top>, (T,), Ignored, 154> {}
+impl<T: Term<Array>> Term<VarArg<PathSpec>>            for TermRepr<fn(Array) -> VarArg<Top>, (T,), Ignored, 154> {}
+impl<T: Term<Array>> Term<VarArg<Error>>               for TermRepr<fn(Array) -> VarArg<Top>, (T,), Ignored, 154> {}
 
 term!(169 => fn uuid() -> Datum);
 
@@ -867,7 +1044,13 @@ mod tests {
 	
 	#[test]
 	fn function_compile() {
-		fn f(v : impl Term<Function<(Datum, Datum), Bool>>) {}
+		fn f(_: impl Term<Function<(Datum, Datum), Bool>>) {}
 		f(c(|a: Var<Datum>, b: Var<Datum>| { a.eq(b) }));
+	}
+	
+	#[test]
+	fn function_compile2() {
+		fn f(_: impl Term<Function<(Datum,), ReqlObject>>) {}
+		f(c(|v: Var<ReqlDatum>| v.cast::<ReqlObject>()));
 	}
 }
